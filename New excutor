@@ -1,0 +1,3153 @@
+--[[
+    ATOM HUB - 1 LocalScript duy nhất
+    ==================================
+    Đặt vào: StarterPlayer > StarterPlayerScripts (LocalScript)
+
+    - Nút nguyên tử bên trái: bấm để mở/tắt menu, GIỮ VÀ KÉO để di chuyển nút.
+    - Kéo phần logo / thanh tiêu đề để di chuyển menu. Phím tắt: F2.
+    - Hỗ trợ cảm ứng (iPhone), Tiếng Việt / English, 6 màu chủ đạo.
+    - Có HỆ THỐNG KEY: sửa bảng CONFIG ngay bên dưới (KEYS, GET_KEY_URL...).
+    - Tab Code: trình soạn thảo có số dòng, quản lý nhiều tệp (thêm/xóa/yêu thích/
+      đổi tên/tìm kiếm), lưu tệp nếu môi trường có writefile.
+
+    Thiết kế mới hoàn toàn:
+      * Thanh bên (sidebar) với logo nguyên tử xoay, electron chạy theo quỹ đạo
+      * Bảng điều khiển nhanh: thanh trượt ngang + ô bật/tắt tính năng
+      * Màn hình loading nguyên tử, chữ ATOM HUB hiện từng chữ
+      * Thông báo trượt xuống từ giữa màn hình
+      * Animation mượt: mở/đóng, chuyển tab, đổi màu, tiêu đề, nút bấm
+]]
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local TeleportService = game:GetService("TeleportService")
+local TweenService = game:GetService("TweenService")
+local Stats = game:GetService("Stats")
+
+local player = Players.LocalPlayer
+
+for _, name in ipairs({ "AtomHubMenu", "BomHubMenu" }) do
+	local old = player.PlayerGui:FindFirstChild(name)
+	if old then old:Destroy() end
+end
+
+local EASE = Enum.EasingStyle
+local DIR = Enum.EasingDirection
+local WHITE = Color3.new(1, 1, 1)
+local BLACK = Color3.new(0, 0, 0)
+
+----------------------------------------------------------------------
+-- CẤU HÌNH KEY (sửa ở đây)
+----------------------------------------------------------------------
+local CONFIG = {
+	KEY_SYSTEM = true,                 -- false = bỏ qua màn hình nhập key
+	KEYS = {                           -- ["KEY"] = true (vĩnh viễn) hoặc mốc os.time() hết hạn
+		["ATOM-FREE-2026"] = true,
+		-- ["ATOM-TRIAL"] = 1893456000,
+	},
+	GET_KEY_URL = "https://your-link-here.example/atom-key", -- link nút "Lấy key"
+	REMOTE_KEYS_URL = "",              -- (tùy chọn) URL file text, mỗi dòng 1 key
+	MAX_ATTEMPTS = 5,                  -- sai quá số lần này sẽ bị khóa tạm
+	COOLDOWN = 30,                     -- số giây bị khóa
+	REMEMBER_KEY = true,               -- nhớ key (cần writefile)
+}
+
+local function trim(s)
+	return (string.gsub(s, "^%s*(.-)%s*$", "%1"))
+end
+
+local function tween(inst, time, props, style, dir)
+	local tw = TweenService:Create(
+		inst,
+		TweenInfo.new(time, style or EASE.Quint, dir or DIR.Out),
+		props
+	)
+	tw:Play()
+	return tw
+end
+
+local function isPress(input)
+	return input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch
+end
+
+local function isMove(input)
+	return input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch
+end
+
+----------------------------------------------------------------------
+-- Ngôn ngữ
+----------------------------------------------------------------------
+local STR = {
+	vi = {
+		tab_home = "Trang chủ", tab_code = "Code", tab_lib = "Thư viện",
+		tab_misc = "Công cụ", tab_set = "Cài đặt",
+		sub_home = "Bảng điều khiển nhanh", sub_code = "Chạy code Luau",
+		sub_lib = "Đoạn code có sẵn", sub_misc = "Thông tin và máy chủ",
+		sub_set = "Tùy chỉnh Atom Hub",
+		welcome = "Xin chào", online = "Trực tuyến",
+		gravity = "Trọng lực", jump = "Nhảy", speed = "Tốc độ",
+		run = "Chạy", clear = "Xóa", on = "BẬT", off = "TẮT",
+		editor_ph = "-- gõ code Luau ở đây\nprint('Xin chào!')",
+		out_default = "Output sẽ hiện ở đây.",
+		lang = "Ngôn ngữ", accent = "Màu chủ đạo", destroy = "Xóa menu",
+		rejoin = "Vào lại server", fps = "FPS", ping = "Ping", players = "Người chơi",
+		server_title = "Máy chủ", server_desc = "Vào lại server hiện tại.",
+		info_place = "Place ID", info_server = "Server", info_ver = "Phiên bản",
+		lib_hint = "Bấm vào một mục để nạp vào tab Code",
+		no_loadstring = "loadstring không khả dụng ở client trong môi trường này.\nRoblox mặc định tắt loadstring phía client.",
+		empty = "Code trống.",
+		done = "Chạy xong (không có output).",
+		n_ready = "Atom Hub đã sẵn sàng!",
+		n_hint = "Giữ và kéo nút nguyên tử để di chuyển nút.",
+		n_lang = "Đã đổi ngôn ngữ.",
+		n_color = "Đã đổi màu chủ đạo.",
+		n_lib = "Đã nạp vào tab Code.",
+		n_run_ok = "Chạy code thành công.",
+		n_run_err = "Code bị lỗi, xem khung output.",
+		n_no_ls = "loadstring không khả dụng.",
+		n_reset = "Đã hồi sinh nhân vật.",
+		n_rejoin = "Đang vào lại server...",
+		load_1 = "Đang khởi tạo hạt nhân...",
+		load_2 = "Đang tải giao diện...",
+		load_3 = "Đang kiểm tra môi trường...",
+		load_4 = "Sẵn sàng!",
+		file_title = "Tệp tin", search_ph = "Tìm kịch bản...",
+		fav_short = "Thích", del_short = "Xóa", tab_files = "Tệp", tab_favs = "Thích",
+		ed_clear = "Xóa", ed_copy = "Chép", ed_paste = "Dán", ed_out = "Out", ed_save = "Lưu",
+		n_saved = "Đã lưu kịch bản.",
+		n_saved_mem = "Đã lưu trong phiên (không có writefile).",
+		n_copied = "Đã sao chép code.",
+		n_copy_fail = "Môi trường không hỗ trợ sao chép.",
+		n_paste_fail = "Không đọc được clipboard, hãy giữ ô để dán.",
+		n_new = "Đã tạo kịch bản mới.",
+		n_deleted = "Đã xóa kịch bản.",
+		n_fav_on = "Đã thêm vào yêu thích.",
+		n_fav_off = "Đã bỏ yêu thích.",
+		key_sub = "Nhập key để mở khóa Atom Hub",
+		key_ph = "Nhập key tại đây...",
+		key_verify = "Xác nhận", key_get = "Lấy key",
+		key_checking = "Đang kiểm tra...",
+		key_ok = "Key hợp lệ! Đang tải...",
+		key_bad = "Key không đúng.",
+		key_empty = "Hãy nhập key.",
+		key_expired = "Key đã hết hạn.",
+		key_wait = "Sai quá nhiều lần. Thử lại sau %d giây",
+		key_copied = "Đã sao chép link lấy key.",
+	},
+	en = {
+		tab_home = "Home", tab_code = "Code", tab_lib = "Library",
+		tab_misc = "Tools", tab_set = "Settings",
+		sub_home = "Quick control panel", sub_code = "Run Luau code",
+		sub_lib = "Ready-made snippets", sub_misc = "Info and server",
+		sub_set = "Customize Atom Hub",
+		welcome = "Welcome", online = "Online",
+		gravity = "Gravity", jump = "Jump", speed = "Speed",
+		run = "Run", clear = "Clear", on = "ON", off = "OFF",
+		editor_ph = "-- type Luau code here\nprint('Hello!')",
+		out_default = "Output will appear here.",
+		lang = "Language", accent = "Accent color", destroy = "Destroy menu",
+		rejoin = "Rejoin server", fps = "FPS", ping = "Ping", players = "Players",
+		server_title = "Server", server_desc = "Rejoin the current server.",
+		info_place = "Place ID", info_server = "Server", info_ver = "Version",
+		lib_hint = "Tap an entry to load it into the Code tab",
+		no_loadstring = "loadstring is not available on the client in this environment.\nRoblox disables client-side loadstring by default.",
+		empty = "Empty code.",
+		done = "Done (no output).",
+		n_ready = "Atom Hub is ready!",
+		n_hint = "Hold and drag the atom button to move it.",
+		n_lang = "Language changed.",
+		n_color = "Accent color changed.",
+		n_lib = "Loaded into the Code tab.",
+		n_run_ok = "Code executed.",
+		n_run_err = "Code error, check the output box.",
+		n_no_ls = "loadstring unavailable.",
+		n_reset = "Character reset.",
+		n_rejoin = "Rejoining...",
+		load_1 = "Initializing nucleus...",
+		load_2 = "Loading interface...",
+		load_3 = "Checking environment...",
+		load_4 = "Ready!",
+		file_title = "Files", search_ph = "Search scripts...",
+		fav_short = "Fav", del_short = "Del", tab_files = "Files", tab_favs = "Favs",
+		ed_clear = "Clear", ed_copy = "Copy", ed_paste = "Paste", ed_out = "Out", ed_save = "Save",
+		n_saved = "Script saved.",
+		n_saved_mem = "Saved for this session (no writefile).",
+		n_copied = "Code copied.",
+		n_copy_fail = "Clipboard not supported here.",
+		n_paste_fail = "Can't read clipboard, long-press the box to paste.",
+		n_new = "New script created.",
+		n_deleted = "Script deleted.",
+		n_fav_on = "Added to favorites.",
+		n_fav_off = "Removed from favorites.",
+		key_sub = "Enter your key to unlock Atom Hub",
+		key_ph = "Enter key here...",
+		key_verify = "Verify", key_get = "Get key",
+		key_checking = "Checking...",
+		key_ok = "Key valid! Loading...",
+		key_bad = "Invalid key.",
+		key_empty = "Please enter a key.",
+		key_expired = "This key has expired.",
+		key_wait = "Too many attempts. Try again in %d s",
+		key_copied = "Key link copied.",
+	},
+}
+
+local lang = "vi"
+local function S(key)
+	return STR[lang][key] or key
+end
+
+local textRegs = {}
+local langHooks = {}
+local function tr(inst, key, prop)
+	prop = prop or "Text"
+	table.insert(textRegs, { inst, key, prop })
+	inst[prop] = S(key)
+end
+
+local refreshTiles -- khai báo trước
+local notify -- khai báo trước
+
+local function applyLang()
+	for _, r in ipairs(textRegs) do
+		r[1][r[3]] = S(r[2])
+	end
+	for _, fn in ipairs(langHooks) do
+		fn()
+	end
+	if refreshTiles then
+		refreshTiles()
+	end
+end
+
+----------------------------------------------------------------------
+-- Màu sắc + hệ thống màu chủ đạo (đổi màu mượt)
+----------------------------------------------------------------------
+local C = {
+	bgTop = Color3.fromRGB(20, 22, 50),
+	bgBot = Color3.fromRGB(6, 7, 18),
+	panel = Color3.fromRGB(28, 32, 70),
+	dark = Color3.fromRGB(10, 12, 28),
+	text = Color3.fromRGB(240, 244, 255),
+	muted = Color3.fromRGB(134, 146, 190),
+	gray = Color3.fromRGB(48, 56, 98),
+	good = Color3.fromRGB(46, 204, 124),
+	warn = Color3.fromRGB(250, 166, 40),
+	bad = Color3.fromRGB(242, 78, 98),
+}
+
+local theme = { accent = Color3.fromRGB(0, 198, 255) }
+local accentTargets = {}
+local accentFns = {}
+
+local function accent2()
+	local h, s, v = theme.accent:ToHSV()
+	return Color3.fromHSV((h + 0.1) % 1, s, v)
+end
+
+local function accent(inst, prop)
+	table.insert(accentTargets, { inst, prop })
+	inst[prop] = theme.accent
+end
+
+local function onAccent(fn)
+	table.insert(accentFns, fn)
+	fn()
+end
+
+local function accentGrad(inst, rotation)
+	local g = Instance.new("UIGradient")
+	g.Rotation = rotation or 0
+	g.Parent = inst
+	onAccent(function()
+		g.Color = ColorSequence.new(theme.accent:Lerp(WHITE, 0.12), accent2())
+	end)
+	return g
+end
+
+local accentVal = Instance.new("Color3Value")
+accentVal.Value = theme.accent
+accentVal.Changed:Connect(function(c)
+	theme.accent = c
+	for _, t in ipairs(accentTargets) do
+		t[1][t[2]] = c
+	end
+	for _, fn in ipairs(accentFns) do
+		fn()
+	end
+end)
+
+local function setAccent(color)
+	tween(accentVal, 0.5, { Value = color }, EASE.Quad)
+end
+
+----------------------------------------------------------------------
+-- Helper UI
+----------------------------------------------------------------------
+local function new(class, props, parent)
+	local i = Instance.new(class)
+	for k, v in pairs(props) do
+		i[k] = v
+	end
+	i.Parent = parent
+	return i
+end
+
+local function round(inst)
+	return new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, inst)
+end
+
+local function corner(inst, r)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, r or 8)
+	c.Parent = inst
+	return c
+end
+
+local function stroke(inst, color, thickness, transparency)
+	local s = Instance.new("UIStroke")
+	s.Color = color
+	s.Thickness = thickness or 1.5
+	s.Transparency = transparency or 0
+	s.Parent = inst
+	return s
+end
+
+local function label(parent, props)
+	local base = {
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 14,
+		TextColor3 = C.text,
+		TextXAlignment = Enum.TextXAlignment.Center,
+	}
+	for k, v in pairs(props) do
+		base[k] = v
+	end
+	return new("TextLabel", base, parent)
+end
+
+-- Nút có hiệu ứng hover (chuột) + nhấn (chạm), co giãn từ tâm
+local function button(parent, props, radius)
+	local base = {
+		AutoButtonColor = false,
+		BackgroundColor3 = C.gray,
+		Font = Enum.Font.GothamBold,
+		TextSize = 14,
+		TextColor3 = C.text,
+	}
+	for k, v in pairs(props) do
+		base[k] = v
+	end
+	local b = new("TextButton", base, parent)
+	corner(b, radius or 10)
+	local pos, size = base.Position, base.Size
+	if pos and size and not props.AnchorPoint and size.X.Scale == 0 and size.Y.Scale == 0 then
+		b.AnchorPoint = Vector2.new(0.5, 0.5)
+		b.Position = UDim2.new(
+			pos.X.Scale, pos.X.Offset + size.X.Offset / 2,
+			pos.Y.Scale, pos.Y.Offset + size.Y.Offset / 2
+		)
+	end
+	local sc = Instance.new("UIScale")
+	sc.Parent = b
+	local hover, down = false, false
+	local function update()
+		tween(sc, 0.2, { Scale = down and 0.94 or (hover and 1.04 or 1) })
+	end
+	b.MouseEnter:Connect(function() hover = true update() end)
+	b.MouseLeave:Connect(function() hover = false down = false update() end)
+	b.InputBegan:Connect(function(input)
+		if isPress(input) then down = true update() end
+	end)
+	b.InputEnded:Connect(function(input)
+		if isPress(input) then down = false update() end
+	end)
+	return b
+end
+
+local function primaryButton(parent, props, radius)
+	local b = button(parent, props, radius)
+	accent(b, "BackgroundColor3")
+	b.TextColor3 = C.dark
+	return b
+end
+
+local function panel(parent, pos, size)
+	local f = new("Frame", {
+		Position = pos,
+		Size = size,
+		BackgroundColor3 = C.panel,
+		BackgroundTransparency = 0.45,
+	}, parent)
+	corner(f, 14)
+	stroke(f, WHITE, 1, 0.9)
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new(WHITE, Color3.fromRGB(170, 182, 224))
+	g.Rotation = 90
+	g.Parent = f
+	return f
+end
+
+-- Nền gradient đặt trong Frame con. KHÔNG đặt UIGradient trực tiếp lên CanvasGroup
+-- vì nó sẽ nhuộm màu toàn bộ nội dung bên trong (làm chữ bị tối).
+local function bgFill(parent, c1, c2, rot)
+	local f = new("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = WHITE,
+		BorderSizePixel = 0,
+		ZIndex = 1,
+	}, parent)
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new(c1, c2)
+	g.Rotation = rot or 90
+	g.Parent = f
+	return f
+end
+
+-- Kéo thả (chuột + cảm ứng). onClick chỉ chạy khi KHÔNG kéo.
+local function makeDraggable(handle, target, onClick)
+	local dragging, dragInput, startPos, startUi, moved = false, nil, nil, nil, false
+
+	handle.InputBegan:Connect(function(input)
+		if isPress(input) then
+			dragging = true
+			moved = false
+			startPos = input.Position
+			startUi = target.Position
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+					if not moved and onClick then
+						onClick()
+					end
+				end
+			end)
+		end
+	end)
+
+	handle.InputChanged:Connect(function(input)
+		if isMove(input) then
+			dragInput = input
+		end
+	end)
+
+	UIS.InputChanged:Connect(function(input)
+		if dragging and input == dragInput then
+			local d = input.Position - startPos
+			if d.Magnitude > 6 then
+				moved = true
+			end
+			if moved then
+				target.Position = UDim2.new(
+					startUi.X.Scale, startUi.X.Offset + d.X,
+					startUi.Y.Scale, startUi.Y.Offset + d.Y
+				)
+			end
+		end
+	end)
+end
+
+----------------------------------------------------------------------
+-- Logo nguyên tử: hạt nhân phát sáng + 3 quỹ đạo chấm + electron chạy
+----------------------------------------------------------------------
+local electrons = {}
+
+local function makeAtom(parent, size, props, opts)
+	opts = opts or {}
+	local base = {
+		Size = UDim2.fromOffset(size, size),
+		BackgroundTransparency = 1,
+	}
+	for k, v in pairs(props or {}) do
+		base[k] = v
+	end
+	local holder = new("Frame", base, parent)
+
+	local dotAlpha = opts.dotAlpha or 0.5
+	local eAlpha = opts.eAlpha or 0
+	local a = size / 2 - math.max(2, size * 0.05)
+	local b = a * 0.38
+	local nDots = size >= 80 and 44 or 26
+	local dotSize = math.max(1.5, size / 46)
+	local eSize = opts.eSize or math.max(4, size * 0.085)
+
+	if not opts.noNucleus then
+		local nSize = size * 0.2
+		local glow = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(nSize * 2, nSize * 2),
+			BackgroundColor3 = theme.accent,
+			BackgroundTransparency = 0.78,
+			ZIndex = 2,
+		}, holder)
+		round(glow)
+		accent(glow, "BackgroundColor3")
+		TweenService:Create(
+			glow,
+			TweenInfo.new(1.4, EASE.Sine, DIR.InOut, -1, true),
+			{ Size = UDim2.fromOffset(nSize * 2.7, nSize * 2.7), BackgroundTransparency = 0.92 }
+		):Play()
+
+		local nuc = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(nSize, nSize),
+			BackgroundColor3 = WHITE,
+			ZIndex = 3,
+		}, holder)
+		round(nuc)
+		accentGrad(nuc, 45)
+	end
+
+	for i = 1, 3 do
+		local orbit = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			Rotation = (i - 1) * 60,
+		}, holder)
+		for j = 1, nDots do
+			local ang = (j / nDots) * math.pi * 2
+			local d = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, math.cos(ang) * a, 0.5, math.sin(ang) * b),
+				Size = UDim2.fromOffset(dotSize, dotSize),
+				BackgroundColor3 = theme.accent,
+				BackgroundTransparency = dotAlpha,
+				BorderSizePixel = 0,
+			}, orbit)
+			round(d)
+			accent(d, "BackgroundColor3")
+		end
+		local e = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Size = UDim2.fromOffset(eSize, eSize),
+			BackgroundColor3 = WHITE,
+			BackgroundTransparency = eAlpha,
+			ZIndex = 4,
+		}, orbit)
+		round(e)
+		accent(stroke(e, theme.accent, math.min(2, math.max(1, eSize / 4)), 0.2), "Color")
+		table.insert(electrons, {
+			dot = e, a = a, b = b,
+			phase = i * 2.1, speed = (1.1 + i * 0.3) * (opts.speed or 1),
+		})
+	end
+
+	TweenService:Create(
+		holder,
+		TweenInfo.new(opts.spin or 26, EASE.Linear, DIR.Out, -1),
+		{ Rotation = 360 }
+	):Play()
+
+	return holder
+end
+
+local atomConn = RunService.RenderStepped:Connect(function()
+	local t = os.clock()
+	for i = #electrons, 1, -1 do
+		local e = electrons[i]
+		if not e.dot.Parent then
+			table.remove(electrons, i)
+		else
+			local ang = e.phase + t * e.speed
+			e.dot.Position = UDim2.new(0.5, math.cos(ang) * e.a, 0.5, math.sin(ang) * e.b)
+		end
+	end
+end)
+
+----------------------------------------------------------------------
+-- Nhân vật
+----------------------------------------------------------------------
+local function getHumanoid()
+	local c = player.Character
+	return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function getRoot()
+	local c = player.Character
+	return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local GRAVITY_MAX, JUMP_MAX, SPEED_MAX = 250, 500, 500
+local changed = { jump = false, speed = false }
+local values = { jump = 50, speed = 16 }
+
+local function applyHumanoid()
+	local hum = getHumanoid()
+	if not hum then return end
+	if changed.speed then
+		hum.WalkSpeed = values.speed
+	end
+	if changed.jump then
+		hum.UseJumpPower = true
+		hum.JumpPower = values.jump
+	end
+end
+
+----------------------------------------------------------------------
+-- Tính năng
+----------------------------------------------------------------------
+local active = { infjump = false, noclip = false, fly = false }
+local feats = {}
+
+local jumpConn
+feats.infjump = function(on)
+	if jumpConn then jumpConn:Disconnect() jumpConn = nil end
+	if on then
+		jumpConn = UIS.JumpRequest:Connect(function()
+			local h = getHumanoid()
+			if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+		end)
+	end
+end
+
+local noclipConn
+feats.noclip = function(on)
+	if noclipConn then noclipConn:Disconnect() noclipConn = nil end
+	if on then
+		noclipConn = RunService.Stepped:Connect(function()
+			local c = player.Character
+			if c then
+				for _, p in ipairs(c:GetDescendants()) do
+					if p:IsA("BasePart") then p.CanCollide = false end
+				end
+			end
+		end)
+	end
+end
+
+local flyConn, flyBV, flyBG
+local FLY_SPEED = 60
+feats.fly = function(on)
+	if flyConn then flyConn:Disconnect() flyConn = nil end
+	if flyBV then flyBV:Destroy() flyBV = nil end
+	if flyBG then flyBG:Destroy() flyBG = nil end
+	local hum = getHumanoid()
+	if hum then hum.PlatformStand = false end
+	if not on then return end
+
+	local root = getRoot()
+	if not root or not hum then return end
+
+	flyBV = Instance.new("BodyVelocity")
+	flyBV.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+	flyBV.Velocity = Vector3.zero
+	flyBV.Parent = root
+
+	flyBG = Instance.new("BodyGyro")
+	flyBG.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+	flyBG.P = 1e4
+	flyBG.Parent = root
+
+	hum.PlatformStand = true
+
+	flyConn = RunService.RenderStepped:Connect(function()
+		local cam = Workspace.CurrentCamera
+		if not cam or not hum.Parent then return end
+		local md = hum.MoveDirection
+		local vel = Vector3.zero
+		if md.Magnitude > 0 then
+			local look = cam.CFrame.LookVector
+			local right = cam.CFrame.RightVector
+			local flatLook = Vector3.new(look.X, 0, look.Z)
+			local flatRight = Vector3.new(right.X, 0, right.Z)
+			local f = flatLook.Magnitude > 0.01 and md:Dot(flatLook.Unit) or 0
+			local r = flatRight.Magnitude > 0.01 and md:Dot(flatRight.Unit) or 0
+			local rightDir = flatRight.Magnitude > 0.01 and flatRight.Unit or Vector3.zero
+			vel = (look * f + rightDir * r) * FLY_SPEED
+		end
+		flyBV.Velocity = vel
+		flyBG.CFrame = cam.CFrame
+	end)
+end
+
+local SCRIPTS = {
+	{ id = "infjump", kind = "toggle",
+		name = { vi = "Nhảy vô hạn", en = "Infinite Jump" } },
+	{ id = "noclip", kind = "toggle",
+		name = { vi = "Xuyên tường", en = "Noclip" } },
+	{ id = "fly", kind = "toggle",
+		name = { vi = "Bay", en = "Fly" } },
+	{ id = "reset", kind = "action",
+		name = { vi = "Hồi sinh", en = "Reset" } },
+}
+
+local function setActive(id, on)
+	active[id] = on
+	if feats[id] then
+		feats[id](on)
+	end
+	if refreshTiles then refreshTiles() end
+	if notify then
+		local name = id
+		for _, s in ipairs(SCRIPTS) do
+			if s.id == id then name = s.name[lang] end
+		end
+		notify(name, on and S("on") or S("off"), on and "success" or "info")
+	end
+end
+
+player.CharacterAdded:Connect(function(char)
+	char:WaitForChild("Humanoid")
+	task.wait(0.1)
+	applyHumanoid()
+	if active.fly then
+		setActive("fly", false)
+	end
+end)
+
+----------------------------------------------------------------------
+-- Cửa sổ chính
+----------------------------------------------------------------------
+local gui = new("ScreenGui", {
+	Name = "AtomHubMenu",
+	ResetOnSpawn = false,
+	IgnoreGuiInset = true,
+	DisplayOrder = 100,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, player:WaitForChild("PlayerGui"))
+
+local MAIN_W, MAIN_H = 640, 360
+local SIDE_W = 168
+
+local root = new("Frame", {
+	Name = "Root",
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.new(0.5, 0, 0.5, 24),
+	Size = UDim2.fromOffset(MAIN_W, MAIN_H),
+	BackgroundTransparency = 1,
+	Visible = false,
+}, gui)
+
+local scale = new("UIScale", { Scale = 1 }, root)
+local fitScale = 1
+local isOpen = false
+local unlocked = false
+local function updateScale()
+	local vp = gui.AbsoluteSize
+	if vp.X > 0 and vp.Y > 0 then
+		fitScale = math.clamp(math.min(vp.X * 0.86 / MAIN_W, vp.Y * 0.74 / MAIN_H), 0.4, 1.2)
+		if isOpen then
+			scale.Scale = fitScale
+		end
+	end
+end
+updateScale()
+gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateScale)
+
+-- Bóng đổ + quầng sáng màu chủ đạo
+local shadows = {}
+for i = 1, 3 do
+	local base = (i == 3) and 0.93 or (0.88 + i * 0.04)
+	local s = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 8),
+		Size = UDim2.new(1, i * 10, 1, i * 10),
+		BackgroundColor3 = (i == 3) and theme.accent or BLACK,
+		BackgroundTransparency = base,
+		ZIndex = 1,
+	}, root)
+	corner(s, 16 + i * 8)
+	if i == 3 then accent(s, "BackgroundColor3") end
+	table.insert(shadows, { s, base })
+end
+
+-- Thân cửa sổ
+local main = new("CanvasGroup", {
+	Name = "Body",
+	Size = UDim2.fromScale(1, 1),
+	BackgroundTransparency = 1,
+	ZIndex = 2,
+	Active = true,
+}, root)
+corner(main, 18)
+bgFill(main, C.bgTop, C.bgBot, 120)
+
+-- Nguyên tử mờ khổng lồ làm nền (xoay rất chậm)
+makeAtom(main, 430, {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.new(0.72, 0, 0.55, 0),
+	ZIndex = 1,
+}, { dotAlpha = 0.93, eAlpha = 0.75, noNucleus = true, spin = 70, speed = 0.5, eSize = 7 })
+
+-- Viền tĩnh + viền sáng chạy vòng quanh
+local borderStatic = new("Frame", {
+	Size = UDim2.fromScale(1, 1),
+	BackgroundTransparency = 1,
+	ZIndex = 3,
+}, root)
+corner(borderStatic, 18)
+local staticStroke = stroke(borderStatic, WHITE, 1.2, 0.86)
+
+local borderShine = new("Frame", {
+	Size = UDim2.fromScale(1, 1),
+	BackgroundTransparency = 1,
+	ZIndex = 4,
+}, root)
+corner(borderShine, 18)
+local shineStroke = stroke(borderShine, WHITE, 2, 0)
+local shineGrad = Instance.new("UIGradient")
+shineGrad.Transparency = NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 0),
+	NumberSequenceKeypoint.new(0.2, 0.5),
+	NumberSequenceKeypoint.new(0.45, 1),
+	NumberSequenceKeypoint.new(0.55, 1),
+	NumberSequenceKeypoint.new(0.8, 0.5),
+	NumberSequenceKeypoint.new(1, 0),
+})
+shineGrad.Parent = shineStroke
+onAccent(function()
+	shineGrad.Color = ColorSequence.new(theme.accent:Lerp(WHITE, 0.3), accent2())
+end)
+TweenService:Create(
+	shineGrad,
+	TweenInfo.new(6, EASE.Linear, DIR.Out, -1),
+	{ Rotation = 360 }
+):Play()
+
+-- Độ mờ toàn cửa sổ (1 = ẩn, 0 = hiện)
+local winAlpha = Instance.new("NumberValue")
+winAlpha.Value = 1
+local function applyWinAlpha(a)
+	main.GroupTransparency = a
+	shineStroke.Transparency = a
+	staticStroke.Transparency = 0.86 + 0.14 * a
+	for _, s in ipairs(shadows) do
+		s[1].BackgroundTransparency = s[2] + (1 - s[2]) * a
+	end
+end
+winAlpha.Changed:Connect(applyWinAlpha)
+applyWinAlpha(1)
+
+----------------------------------------------------------------------
+-- Thanh bên (sidebar)
+----------------------------------------------------------------------
+local sidebar = new("Frame", {
+	Size = UDim2.fromOffset(SIDE_W, MAIN_H),
+	BackgroundColor3 = C.dark,
+	BackgroundTransparency = 0.35,
+	ZIndex = 2,
+}, main)
+new("Frame", {
+	Position = UDim2.new(1, -1, 0, 0),
+	Size = UDim2.new(0, 1, 1, 0),
+	BackgroundColor3 = WHITE,
+	BackgroundTransparency = 0.92,
+	BorderSizePixel = 0,
+}, sidebar)
+
+local sideHead = new("Frame", {
+	Size = UDim2.new(1, 0, 0, 70),
+	BackgroundTransparency = 1,
+}, sidebar)
+makeDraggable(sideHead, root)
+
+makeAtom(sideHead, 46, { Position = UDim2.fromOffset(14, 12) }, { spin = 18 })
+local atomTitle = label(sideHead, {
+	Position = UDim2.fromOffset(68, 14),
+	Size = UDim2.fromOffset(92, 22),
+	Text = "ATOM",
+	Font = Enum.Font.GothamBlack,
+	TextSize = 20,
+	TextColor3 = WHITE,
+	TextXAlignment = Enum.TextXAlignment.Left,
+})
+accentGrad(atomTitle, 0)
+label(sideHead, {
+	Position = UDim2.fromOffset(68, 36),
+	Size = UDim2.fromOffset(92, 16),
+	Text = "HUB  v1.0",
+	Font = Enum.Font.GothamBold,
+	TextSize = 11,
+	TextColor3 = C.muted,
+	TextXAlignment = Enum.TextXAlignment.Left,
+})
+
+-- Thẻ người dùng ở đáy
+local userCard = new("Frame", {
+	Position = UDim2.fromOffset(10, MAIN_H - 62),
+	Size = UDim2.fromOffset(SIDE_W - 20, 50),
+	BackgroundColor3 = C.panel,
+	BackgroundTransparency = 0.5,
+}, sidebar)
+corner(userCard, 14)
+stroke(userCard, WHITE, 1, 0.92)
+local avatar = new("ImageLabel", {
+	Position = UDim2.fromOffset(8, 7),
+	Size = UDim2.fromOffset(36, 36),
+	BackgroundColor3 = C.dark,
+	Image = "",
+}, userCard)
+round(avatar)
+accent(stroke(avatar, theme.accent, 2), "Color")
+task.spawn(function()
+	local ok, img = pcall(function()
+		return Players:GetUserThumbnailAsync(
+			player.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100
+		)
+	end)
+	if ok then avatar.Image = img end
+end)
+label(userCard, {
+	Position = UDim2.fromOffset(52, 7),
+	Size = UDim2.fromOffset(88, 18),
+	Text = player.DisplayName,
+	Font = Enum.Font.GothamBold,
+	TextSize = 13,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+})
+local onlineDot = new("Frame", {
+	Position = UDim2.fromOffset(53, 31),
+	Size = UDim2.fromOffset(8, 8),
+	BackgroundColor3 = C.good,
+}, userCard)
+round(onlineDot)
+TweenService:Create(
+	onlineDot,
+	TweenInfo.new(1.2, EASE.Sine, DIR.InOut, -1, true),
+	{ BackgroundTransparency = 0.6 }
+):Play()
+local onlineLbl = label(userCard, {
+	Position = UDim2.fromOffset(66, 26),
+	Size = UDim2.fromOffset(76, 18),
+	TextSize = 11,
+	TextColor3 = C.muted,
+	TextXAlignment = Enum.TextXAlignment.Left,
+})
+tr(onlineLbl, "online")
+
+----------------------------------------------------------------------
+-- Thanh trên + nội dung
+----------------------------------------------------------------------
+local topBar = new("Frame", {
+	Position = UDim2.fromOffset(SIDE_W, 0),
+	Size = UDim2.fromOffset(MAIN_W - SIDE_W, 56),
+	BackgroundTransparency = 1,
+	ZIndex = 5,
+}, main)
+makeDraggable(topBar, root)
+
+local TITLE_POS = UDim2.fromOffset(16, 8)
+local SUB_POS = UDim2.fromOffset(16, 32)
+local pageTitle = label(topBar, {
+	Position = TITLE_POS,
+	Size = UDim2.fromOffset(240, 26),
+	Font = Enum.Font.GothamBlack,
+	TextSize = 20,
+	TextXAlignment = Enum.TextXAlignment.Left,
+})
+local pageSub = label(topBar, {
+	Position = SUB_POS,
+	Size = UDim2.fromOffset(240, 18),
+	TextSize = 12,
+	TextColor3 = C.muted,
+	TextXAlignment = Enum.TextXAlignment.Left,
+})
+
+local minBtn = button(topBar, {
+	Position = UDim2.fromOffset(MAIN_W - SIDE_W - 84, 12),
+	Size = UDim2.fromOffset(32, 32),
+	Text = "–",
+	TextSize = 18,
+	BackgroundColor3 = C.gray,
+}, 16)
+local closeBtn = button(topBar, {
+	Position = UDim2.fromOffset(MAIN_W - SIDE_W - 44, 12),
+	Size = UDim2.fromOffset(32, 32),
+	Text = "X",
+	TextSize = 13,
+	BackgroundColor3 = C.bad,
+}, 16)
+
+local content = new("Frame", {
+	Position = UDim2.fromOffset(SIDE_W + 12, 58),
+	Size = UDim2.fromOffset(448, 292),
+	BackgroundTransparency = 1,
+}, main)
+
+----------------------------------------------------------------------
+-- Tabs
+----------------------------------------------------------------------
+local pages = {}
+local groups = {}
+local tabRows = {}
+local TAB_KEYS = { "tab_home", "tab_code", "tab_lib", "tab_misc", "tab_set" }
+local SUB_KEYS = { "sub_home", "sub_code", "sub_lib", "sub_misc", "sub_set" }
+local ROW_H, ROW_GAP, ROW_Y0 = 40, 4, 80
+
+local function rowY(i)
+	return ROW_Y0 + (i - 1) * (ROW_H + ROW_GAP)
+end
+
+-- Thanh chọn trượt + vạch sáng bên trái
+local tabSel = new("Frame", {
+	Position = UDim2.fromOffset(10, rowY(1)),
+	Size = UDim2.fromOffset(SIDE_W - 20, ROW_H),
+	BackgroundColor3 = WHITE,
+	BackgroundTransparency = 0.82,
+	ZIndex = 1,
+}, sidebar)
+corner(tabSel, 12)
+accentGrad(tabSel, 0)
+
+local tabBar = new("Frame", {
+	Position = UDim2.fromOffset(0, rowY(1) + 10),
+	Size = UDim2.fromOffset(3, ROW_H - 20),
+	BackgroundColor3 = theme.accent,
+	BorderSizePixel = 0,
+	ZIndex = 2,
+}, sidebar)
+round(tabBar)
+accent(tabBar, "BackgroundColor3")
+
+-- Các khối của một trang trồi lên lần lượt
+local function stagger(page)
+	local i = 0
+	for _, child in ipairs(page:GetChildren()) do
+		if child:IsA("GuiObject") then
+			i += 1
+			local final = child:GetAttribute("FinalPos")
+			if not final then
+				final = child.Position
+				child:SetAttribute("FinalPos", final)
+			end
+			child.Position = final + UDim2.fromOffset(0, 18)
+			task.delay(0.05 * i, function()
+				tween(child, 0.6, { Position = final }, EASE.Quint)
+			end)
+		end
+	end
+end
+
+-- Tiêu đề trang đổi chữ có hiệu ứng
+local currentTab = 0
+local titleToken = 0
+local function setTitle(index, instant)
+	titleToken += 1
+	local token = titleToken
+	local function apply()
+		pageTitle.Text = S(TAB_KEYS[index])
+		pageSub.Text = S(SUB_KEYS[index])
+	end
+	if instant then
+		apply()
+		return
+	end
+	tween(pageTitle, 0.14, { TextTransparency = 1, Position = TITLE_POS + UDim2.fromOffset(-12, 0) }, EASE.Quad, DIR.In)
+	tween(pageSub, 0.14, { TextTransparency = 1, Position = SUB_POS + UDim2.fromOffset(-12, 0) }, EASE.Quad, DIR.In)
+	task.delay(0.14, function()
+		if token ~= titleToken then return end
+		apply()
+		pageTitle.Position = TITLE_POS + UDim2.fromOffset(16, 0)
+		pageSub.Position = SUB_POS + UDim2.fromOffset(16, 0)
+		tween(pageTitle, 0.5, { TextTransparency = 0, Position = TITLE_POS })
+		tween(pageSub, 0.5, { TextTransparency = 0, Position = SUB_POS })
+	end)
+end
+table.insert(langHooks, function()
+	if currentTab > 0 then
+		pageTitle.Text = S(TAB_KEYS[currentTab])
+		pageSub.Text = S(SUB_KEYS[currentTab])
+	end
+end)
+
+local function selectTab(index, instant)
+	if index == currentTab then return end
+	local prev = currentTab
+	currentTab = index
+	local dir = (prev == 0 or index > prev) and 1 or -1
+	local rest = UDim2.fromOffset(-8, -8)
+
+	for i, g in ipairs(groups) do
+		if i == index then
+			g.Visible = true
+			if instant or prev == 0 then
+				g.Position = rest
+				g.GroupTransparency = 0
+			else
+				g.Position = UDim2.fromOffset(-8, -8 + 22 * dir)
+				g.GroupTransparency = 1
+				tween(g, 0.4, { Position = rest, GroupTransparency = 0 })
+				stagger(pages[i])
+			end
+		elseif i == prev and not instant then
+			local t = tween(g, 0.16, {
+				Position = UDim2.fromOffset(-8, -8 - 22 * dir),
+				GroupTransparency = 1,
+			}, EASE.Quad, DIR.In)
+			t.Completed:Connect(function()
+				if currentTab ~= i then g.Visible = false end
+			end)
+		else
+			g.Visible = false
+		end
+	end
+
+	for i, r in ipairs(tabRows) do
+		local on = (i == index)
+		tween(r.text, 0.25, { TextColor3 = on and WHITE or C.muted }, EASE.Quad)
+		tween(r.chip, 0.25, { TextColor3 = on and theme.accent or C.gray }, EASE.Quad)
+	end
+
+	local selTarget = UDim2.fromOffset(10, rowY(index))
+	local barTarget = UDim2.fromOffset(0, rowY(index) + 10)
+	if instant or prev == 0 then
+		tabSel.Position = selTarget
+		tabBar.Position = barTarget
+	else
+		tween(tabSel, 0.5, { Position = selTarget }, EASE.Back)
+		tween(tabBar, 0.4, { Position = barTarget }, EASE.Quint)
+	end
+	setTitle(index, instant or prev == 0)
+end
+
+for i, key in ipairs(TAB_KEYS) do
+	local group = new("CanvasGroup", {
+		Position = UDim2.fromOffset(-8, -8),
+		Size = UDim2.fromOffset(464, 308),
+		BackgroundTransparency = 1,
+		Visible = false,
+	}, content)
+	local inner = new("Frame", {
+		Position = UDim2.fromOffset(8, 8),
+		Size = UDim2.fromOffset(448, 292),
+		BackgroundTransparency = 1,
+	}, group)
+	table.insert(groups, group)
+	table.insert(pages, inner)
+
+	local row = new("TextButton", {
+		Position = UDim2.fromOffset(10, rowY(i)),
+		Size = UDim2.fromOffset(SIDE_W - 20, ROW_H),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+		ZIndex = 3,
+	}, sidebar)
+	local chip = label(row, {
+		Position = UDim2.fromOffset(12, 0),
+		Size = UDim2.fromOffset(26, ROW_H),
+		Text = string.format("0%d", i),
+		Font = Enum.Font.Code,
+		TextSize = 13,
+		TextColor3 = C.gray,
+	})
+	local text = label(row, {
+		Position = UDim2.fromOffset(44, 0),
+		Size = UDim2.fromOffset(SIDE_W - 70, ROW_H),
+		Font = Enum.Font.GothamBold,
+		TextSize = 14,
+		TextColor3 = C.muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	})
+	tr(text, key)
+	tabRows[i] = { row = row, text = text, chip = chip }
+
+	row.MouseEnter:Connect(function()
+		if currentTab ~= i then
+			tween(text, 0.2, { TextColor3 = C.text }, EASE.Quad)
+		end
+	end)
+	row.MouseLeave:Connect(function()
+		if currentTab ~= i then
+			tween(text, 0.2, { TextColor3 = C.muted }, EASE.Quad)
+		end
+	end)
+	row.Activated:Connect(function()
+		selectTab(i)
+	end)
+end
+
+onAccent(function()
+	if currentTab > 0 and tabRows[currentTab] then
+		tabRows[currentTab].chip.TextColor3 = theme.accent
+	end
+end)
+
+----------------------------------------------------------------------
+-- Nút nguyên tử bật/tắt menu (kéo được)
+----------------------------------------------------------------------
+local toggleHolder = new("Frame", {
+	Name = "ToggleHolder",
+	Position = UDim2.new(0, 16, 0.4, 0),
+	Size = UDim2.fromOffset(60, 60),
+	BackgroundTransparency = 1,
+	ZIndex = 10,
+}, gui)
+
+local pingRing = new("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromOffset(60, 60),
+	BackgroundColor3 = theme.accent,
+	BackgroundTransparency = 0.6,
+	ZIndex = 1,
+}, toggleHolder)
+round(pingRing)
+accent(pingRing, "BackgroundColor3")
+TweenService:Create(
+	pingRing,
+	TweenInfo.new(1.8, EASE.Quad, DIR.Out, -1),
+	{ Size = UDim2.fromOffset(96, 96), BackgroundTransparency = 1 }
+):Play()
+
+local toggleBtn = new("TextButton", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromOffset(60, 60),
+	BackgroundColor3 = C.dark,
+	BackgroundTransparency = 0.05,
+	Text = "",
+	AutoButtonColor = false,
+	ZIndex = 2,
+}, toggleHolder)
+round(toggleBtn)
+accent(stroke(toggleBtn, theme.accent, 2), "Color")
+makeAtom(toggleBtn, 44, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5) }, { spin = 12 })
+
+local toggleScale = new("UIScale", { Scale = 1 }, toggleBtn)
+local function bounce()
+	toggleScale.Scale = 0.78
+	tween(toggleScale, 0.5, { Scale = 1 }, EASE.Back)
+end
+
+----------------------------------------------------------------------
+-- Thông báo (toast) trượt xuống từ giữa màn hình
+----------------------------------------------------------------------
+local toastHolder = new("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0),
+	Position = UDim2.new(0.5, 0, 0, 18),
+	Size = UDim2.fromOffset(320, 320),
+	BackgroundTransparency = 1,
+	ZIndex = 20,
+}, gui)
+new("UIListLayout", {
+	Padding = UDim.new(0, 8),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+	HorizontalAlignment = Enum.HorizontalAlignment.Center,
+}, toastHolder)
+
+local toastOrder = 0
+local TOAST_W, TOAST_H, TOAST_TIME = 300, 58, 3.2
+
+notify = function(title, text, kind)
+	if not gui.Parent then return end
+	local col, symbol = theme.accent, "i"
+	if kind == "success" then
+		col, symbol = C.good, "✓"
+	elseif kind == "warn" then
+		col, symbol = C.warn, "!"
+	elseif kind == "error" then
+		col, symbol = C.bad, "×"
+	end
+
+	local list = {}
+	for _, c in ipairs(toastHolder:GetChildren()) do
+		if c:IsA("Frame") then table.insert(list, c) end
+	end
+	if #list >= 3 then
+		table.sort(list, function(a, b) return a.LayoutOrder < b.LayoutOrder end)
+		list[1]:Destroy()
+	end
+
+	toastOrder += 1
+	local wrap = new("Frame", {
+		Size = UDim2.fromOffset(TOAST_W, TOAST_H),
+		BackgroundTransparency = 1,
+		LayoutOrder = toastOrder,
+	}, toastHolder)
+
+	local toast = new("CanvasGroup", {
+		Position = UDim2.fromOffset(0, -80),
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		GroupTransparency = 1,
+	}, wrap)
+	corner(toast, 29)
+	bgFill(toast, Color3.fromRGB(32, 38, 84), Color3.fromRGB(12, 15, 36), 90)
+
+	local icon = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset(31, 29),
+		Size = UDim2.fromOffset(38, 38),
+		BackgroundColor3 = col,
+	}, toast)
+	round(icon)
+	label(icon, {
+		Size = UDim2.fromScale(1, 1),
+		Text = symbol,
+		Font = Enum.Font.GothamBlack,
+		TextSize = 17,
+		TextColor3 = C.dark,
+	})
+	local iconScale = new("UIScale", { Scale = 0.3 }, icon)
+
+	label(toast, {
+		Position = UDim2.fromOffset(60, 10),
+		Size = UDim2.new(1, -76, 0, 20),
+		Text = title,
+		Font = Enum.Font.GothamBold,
+		TextSize = 14,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	})
+	label(toast, {
+		Position = UDim2.fromOffset(60, 30),
+		Size = UDim2.new(1, -76, 0, 20),
+		Text = text,
+		TextSize = 12,
+		TextColor3 = C.muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	})
+
+	local progress = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -2),
+		Size = UDim2.fromOffset(TOAST_W - 56, 2),
+		BackgroundColor3 = col,
+		BorderSizePixel = 0,
+	}, toast)
+	round(progress)
+
+	local clickArea = new("TextButton", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = "",
+		ZIndex = 5,
+	}, toast)
+
+	tween(toast, 0.6, { Position = UDim2.fromOffset(0, 0), GroupTransparency = 0 }, EASE.Exponential)
+	task.delay(0.15, function()
+		tween(iconScale, 0.5, { Scale = 1 }, EASE.Back)
+	end)
+	tween(progress, TOAST_TIME, { Size = UDim2.fromOffset(0, 2) }, EASE.Linear)
+
+	local dismissed = false
+	local function dismiss()
+		if dismissed then return end
+		dismissed = true
+		local t = tween(toast, 0.3, {
+			Position = UDim2.fromOffset(0, -60),
+			GroupTransparency = 1,
+		}, EASE.Quint, DIR.In)
+		t.Completed:Connect(function()
+			local t2 = tween(wrap, 0.25, { Size = UDim2.fromOffset(TOAST_W, 0) }, EASE.Quint)
+			t2.Completed:Connect(function()
+				wrap:Destroy()
+			end)
+		end)
+	end
+	clickArea.Activated:Connect(dismiss)
+	task.delay(TOAST_TIME, dismiss)
+end
+
+----------------------------------------------------------------------
+-- Mở / đóng / thu gọn
+----------------------------------------------------------------------
+local animToken = 0
+
+local function openMenu()
+	if isOpen then return end
+	isOpen = true
+	animToken += 1
+	root.Visible = true
+	scale.Scale = fitScale * 0.9
+	tween(scale, 0.6, { Scale = fitScale }, EASE.Exponential)
+	tween(winAlpha, 0.4, { Value = 0 }, EASE.Quad)
+	pingRing.Visible = false
+end
+
+local function closeMenu()
+	if not isOpen then return end
+	isOpen = false
+	animToken += 1
+	local token = animToken
+	pingRing.Visible = true
+	tween(scale, 0.28, { Scale = fitScale * 0.94 }, EASE.Quad, DIR.In)
+	local t = tween(winAlpha, 0.28, { Value = 1 }, EASE.Quad, DIR.In)
+	t.Completed:Connect(function()
+		if token == animToken and not isOpen then
+			root.Visible = false
+		end
+	end)
+end
+
+local function toggleMenu()
+	if isOpen then closeMenu() else openMenu() end
+end
+
+makeDraggable(toggleBtn, toggleHolder, function()
+	if not unlocked then return end
+	bounce()
+	toggleMenu()
+end)
+closeBtn.Activated:Connect(closeMenu)
+
+local collapsed = false
+minBtn.Activated:Connect(function()
+	collapsed = not collapsed
+	if collapsed then
+		local t = tween(root, 0.4, { Size = UDim2.fromOffset(MAIN_W, 56) }, EASE.Quint)
+		t.Completed:Connect(function()
+			if collapsed then content.Visible = false end
+		end)
+	else
+		content.Visible = true
+		tween(root, 0.5, { Size = UDim2.fromOffset(MAIN_W, MAIN_H) }, EASE.Back)
+	end
+end)
+
+UIS.InputBegan:Connect(function(input, processed)
+	if processed then return end
+	if input.KeyCode == Enum.KeyCode.F2 and unlocked then
+		toggleMenu()
+	end
+end)
+
+----------------------------------------------------------------------
+-- TAB 1: Trang chủ
+----------------------------------------------------------------------
+local home = pages[1]
+
+-- Thẻ chào mừng
+local hero = panel(home, UDim2.fromOffset(0, 0), UDim2.fromOffset(448, 84))
+makeAtom(hero, 64, { Position = UDim2.fromOffset(14, 10) }, { spin = 16 })
+local welcomeLbl = label(hero, {
+	Position = UDim2.fromOffset(92, 16),
+	Size = UDim2.fromOffset(180, 18),
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextColor3 = C.muted,
+	TextSize = 13,
+})
+tr(welcomeLbl, "welcome")
+label(hero, {
+	Position = UDim2.fromOffset(92, 36),
+	Size = UDim2.fromOffset(200, 32),
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Font = Enum.Font.GothamBlack,
+	TextSize = 21,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+	Text = player.DisplayName,
+})
+
+local function pill(parent, pos, size)
+	local f = new("Frame", {
+		Position = pos,
+		Size = size,
+		BackgroundColor3 = C.dark,
+		BackgroundTransparency = 0.2,
+	}, parent)
+	round(f)
+	stroke(f, WHITE, 1, 0.9)
+	return label(f, {
+		Size = UDim2.fromScale(1, 1),
+		Font = Enum.Font.GothamBold,
+		TextSize = 12,
+		Text = "--",
+	})
+end
+local heroFps = pill(hero, UDim2.fromOffset(304, 18), UDim2.fromOffset(60, 26))
+local heroPing = pill(hero, UDim2.fromOffset(372, 18), UDim2.fromOffset(62, 26))
+local heroVer = label(hero, {
+	Position = UDim2.fromOffset(304, 52),
+	Size = UDim2.fromOffset(130, 18),
+	Text = "ATOM HUB v1.0",
+	Font = Enum.Font.Code,
+	TextSize = 11,
+	TextColor3 = C.muted,
+})
+
+-- Thanh trượt ngang
+local sliderPanel = panel(home, UDim2.fromOffset(0, 92), UDim2.fromOffset(448, 116))
+
+local function makeHSlider(y, key, init, onChange)
+	local name = label(sliderPanel, {
+		Position = UDim2.fromOffset(18, y),
+		Size = UDim2.fromOffset(86, 28),
+		Font = Enum.Font.GothamBold,
+		TextSize = 13,
+		TextColor3 = C.muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	})
+	tr(name, key)
+
+	local track = new("Frame", {
+		Position = UDim2.fromOffset(112, y + 9),
+		Size = UDim2.fromOffset(250, 10),
+		BackgroundColor3 = C.dark,
+	}, sliderPanel)
+	round(track)
+	stroke(track, WHITE, 1, 0.92)
+
+	local fill = new("Frame", {
+		Size = UDim2.new(0, 0, 1, 0),
+		BackgroundColor3 = WHITE,
+		BorderSizePixel = 0,
+	}, track)
+	round(fill)
+	accentGrad(fill, 0)
+
+	local knob = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.fromOffset(22, 22),
+		BackgroundColor3 = WHITE,
+		ZIndex = 3,
+	}, track)
+	round(knob)
+	accent(stroke(knob, theme.accent, 3), "Color")
+
+	local pct = label(sliderPanel, {
+		Position = UDim2.fromOffset(376, y),
+		Size = UDim2.fromOffset(54, 28),
+		Font = Enum.Font.GothamBold,
+		TextSize = 13,
+		Text = "0%",
+	})
+
+	local function set(p, fire, instant)
+		p = math.clamp(p, 0, 1)
+		local d = instant and 0 or 0.1
+		tween(fill, d, { Size = UDim2.new(p, 0, 1, 0) }, EASE.Quad)
+		tween(knob, d, { Position = UDim2.new(p, 0, 0.5, 0) }, EASE.Quad)
+		pct.Text = math.floor(p * 100 + 0.5) .. "%"
+		if fire then onChange(p) end
+	end
+	set(init, false, true)
+
+	-- vùng chạm lớn hơn cho ngón tay
+	local hit = new("TextButton", {
+		Position = UDim2.fromOffset(100, y - 2),
+		Size = UDim2.fromOffset(274, 32),
+		BackgroundTransparency = 1,
+		Text = "",
+		ZIndex = 4,
+	}, sliderPanel)
+
+	local dragging, activeInput = false, nil
+	local function fromInput(pos)
+		local w = track.AbsoluteSize.X
+		if w <= 0 then return end
+		set((pos.X - track.AbsolutePosition.X) / w, true)
+	end
+	hit.InputBegan:Connect(function(input)
+		if isPress(input) then
+			dragging = true
+			activeInput = input
+			tween(knob, 0.2, { Size = UDim2.fromOffset(30, 30) }, EASE.Back)
+			fromInput(input.Position)
+		end
+	end)
+	UIS.InputChanged:Connect(function(input)
+		if dragging and isMove(input)
+			and (input == activeInput or input.UserInputType == Enum.UserInputType.MouseMovement) then
+			fromInput(input.Position)
+		end
+	end)
+	UIS.InputEnded:Connect(function(input)
+		if input == activeInput then
+			dragging = false
+			tween(knob, 0.25, { Size = UDim2.fromOffset(22, 22) }, EASE.Back)
+		end
+	end)
+	return set
+end
+
+do
+	local hum = getHumanoid()
+	if hum then
+		values.speed = hum.WalkSpeed
+		values.jump = hum.UseJumpPower and hum.JumpPower or 50
+	end
+end
+
+makeHSlider(10, "gravity", math.clamp(Workspace.Gravity / GRAVITY_MAX, 0, 1), function(p)
+	Workspace.Gravity = p * GRAVITY_MAX
+end)
+makeHSlider(44, "jump", math.clamp(values.jump / JUMP_MAX, 0, 1), function(p)
+	values.jump = p * JUMP_MAX
+	changed.jump = true
+	applyHumanoid()
+end)
+makeHSlider(78, "speed", math.clamp(values.speed / SPEED_MAX, 0, 1), function(p)
+	values.speed = p * SPEED_MAX
+	changed.speed = true
+	applyHumanoid()
+end)
+
+-- Ô bật/tắt tính năng
+local tiles = {}
+local TILE_W, TILE_H = 106, 76
+
+local function styleTile(t, on, instant)
+	local d = instant and 0 or 0.35
+	tween(t.btn, d, {
+		BackgroundColor3 = on and theme.accent:Lerp(C.dark, 0.6) or C.panel,
+		BackgroundTransparency = on and 0.05 or 0.45,
+	}, EASE.Quad)
+	tween(t.stroke, d, {
+		Transparency = on and 0 or 0.9,
+		Color = on and theme.accent or WHITE,
+	}, EASE.Quad)
+	tween(t.dot, d, {
+		BackgroundColor3 = on and theme.accent or C.gray,
+		Size = on and UDim2.fromOffset(12, 12) or UDim2.fromOffset(8, 8),
+	}, EASE.Back)
+	tween(t.state, d, {
+		TextColor3 = on and theme.accent:Lerp(WHITE, 0.3) or C.muted,
+	}, EASE.Quad)
+end
+
+for i, s in ipairs(SCRIPTS) do
+	local btn = button(home, {
+		Position = UDim2.fromOffset((i - 1) * (TILE_W + 8), 216),
+		Size = UDim2.fromOffset(TILE_W, TILE_H),
+		BackgroundColor3 = C.panel,
+		BackgroundTransparency = 0.45,
+		Text = "",
+	}, 14)
+	local st = stroke(btn, WHITE, 1.5, 0.9)
+	local nameL = label(btn, {
+		Position = UDim2.fromOffset(12, 10),
+		Size = UDim2.new(1, -24, 0, 34),
+		Font = Enum.Font.GothamBold,
+		TextSize = 14,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextWrapped = true,
+	})
+	local stateL = label(btn, {
+		Position = UDim2.fromOffset(12, 50),
+		Size = UDim2.fromOffset(60, 18),
+		Font = Enum.Font.GothamBold,
+		TextSize = 11,
+		TextColor3 = C.muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	})
+	local dot = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(1, -18, 1, -18),
+		Size = UDim2.fromOffset(8, 8),
+		BackgroundColor3 = C.gray,
+	}, btn)
+	round(dot)
+	if s.kind == "action" then
+		dot.Visible = false
+	end
+
+	tiles[s.id] = { btn = btn, stroke = st, name = nameL, state = stateL, dot = dot, kind = s.kind }
+
+	btn.Activated:Connect(function()
+		if s.kind == "toggle" then
+			setActive(s.id, not active[s.id])
+		elseif s.id == "reset" then
+			local h = getHumanoid()
+			if h then h.Health = 0 end
+			notify(s.name[lang], S("n_reset"), "success")
+		end
+	end)
+end
+
+refreshTiles = function()
+	for _, s in ipairs(SCRIPTS) do
+		local t = tiles[s.id]
+		t.name.Text = s.name[lang]
+		if s.kind == "toggle" then
+			t.state.Text = active[s.id] and S("on") or S("off")
+			styleTile(t, active[s.id])
+		else
+			t.state.Text = S("run")
+		end
+	end
+end
+
+onAccent(function()
+	for _, s in ipairs(SCRIPTS) do
+		local t = tiles[s.id]
+		if t and s.kind == "toggle" and active[s.id] then
+			t.btn.BackgroundColor3 = theme.accent:Lerp(C.dark, 0.6)
+			t.stroke.Color = theme.accent
+			t.dot.BackgroundColor3 = theme.accent
+			t.state.TextColor3 = theme.accent:Lerp(WHITE, 0.3)
+		end
+	end
+end)
+
+----------------------------------------------------------------------
+-- TAB 2: Code (trình soạn thảo có số dòng + quản lý tệp)
+----------------------------------------------------------------------
+local codePage = pages[2]
+local HttpService = game:GetService("HttpService")
+
+local SAVE_FILE = "AtomHub/scripts.json"
+
+local function hasFS()
+	return type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function"
+end
+local clipSet = (type(setclipboard) == "function" and setclipboard)
+	or (type(toclipboard) == "function" and toclipboard) or nil
+local clipGet = (type(getclipboard) == "function" and getclipboard) or nil
+
+local function ensureFolder()
+	pcall(function()
+		if type(makefolder) == "function" and type(isfolder) == "function" and not isfolder("AtomHub") then
+			makefolder("AtomHub")
+		end
+	end)
+end
+
+-- Trạng thái các kịch bản
+local scriptsData = {}
+local currentScript = nil
+local idCounter, nextNum = 0, 1
+local dirty, loading = false, false
+local filterFav = false
+local selectScript, renderList -- khai báo trước
+
+-- Khung trình soạn thảo ---------------------------------------------
+local editor = new("Frame", {
+	Size = UDim2.fromOffset(304, 292),
+	BackgroundColor3 = C.dark,
+	BackgroundTransparency = 0.12,
+	ClipsDescendants = true,
+}, codePage)
+corner(editor, 14)
+local editorStroke = stroke(editor, WHITE, 1.5, 0.88)
+
+local scriptTitle = label(editor, {
+	Position = UDim2.fromOffset(14, 8),
+	Size = UDim2.fromOffset(200, 24),
+	Font = Enum.Font.GothamBold,
+	TextSize = 13,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+})
+local saveBtn = primaryButton(editor, {
+	Position = UDim2.fromOffset(304 - 12 - 60, 8),
+	Size = UDim2.fromOffset(60, 24),
+	TextSize = 12,
+}, 8)
+tr(saveBtn, "ed_save")
+new("Frame", {
+	Position = UDim2.fromOffset(12, 38),
+	Size = UDim2.fromOffset(280, 1),
+	BackgroundColor3 = WHITE,
+	BackgroundTransparency = 0.92,
+	BorderSizePixel = 0,
+}, editor)
+
+local editorScroll = new("ScrollingFrame", {
+	Position = UDim2.fromOffset(6, 42),
+	Size = UDim2.fromOffset(292, 244),
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	ScrollBarThickness = 3,
+	CanvasSize = UDim2.new(),
+	AutomaticCanvasSize = Enum.AutomaticSize.XY,
+	ScrollingDirection = Enum.ScrollingDirection.XY,
+}, editor)
+
+local gutter = label(editorScroll, {
+	Position = UDim2.fromOffset(0, 0),
+	Size = UDim2.fromOffset(34, 0),
+	AutomaticSize = Enum.AutomaticSize.Y,
+	Font = Enum.Font.Code,
+	TextSize = 13,
+	TextColor3 = Color3.fromRGB(84, 98, 148),
+	TextXAlignment = Enum.TextXAlignment.Right,
+	TextYAlignment = Enum.TextYAlignment.Top,
+	Text = "1",
+})
+new("UIPadding", { PaddingTop = UDim.new(0, 6), PaddingRight = UDim.new(0, 8) }, gutter)
+
+local box = new("TextBox", {
+	Position = UDim2.fromOffset(38, 0),
+	Size = UDim2.fromOffset(240, 236),
+	AutomaticSize = Enum.AutomaticSize.XY,
+	BackgroundTransparency = 1,
+	TextColor3 = Color3.fromRGB(226, 232, 250),
+	PlaceholderColor3 = Color3.fromRGB(100, 114, 160),
+	Font = Enum.Font.Code,
+	TextSize = 13,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextYAlignment = Enum.TextYAlignment.Top,
+	ClearTextOnFocus = false,
+	MultiLine = true,
+	TextWrapped = false,
+	Text = "",
+}, editorScroll)
+new("UIPadding", {
+	PaddingTop = UDim.new(0, 6), PaddingLeft = UDim.new(0, 4),
+	PaddingRight = UDim.new(0, 30), PaddingBottom = UDim.new(0, 64),
+}, box)
+tr(box, "editor_ph", "PlaceholderText")
+
+box.Focused:Connect(function()
+	tween(editorStroke, 0.3, { Color = theme.accent, Transparency = 0, Thickness = 2 }, EASE.Quad)
+end)
+box.FocusLost:Connect(function()
+	tween(editorStroke, 0.3, { Color = WHITE, Transparency = 0.88, Thickness = 1.5 }, EASE.Quad)
+	if currentScript then currentScript.code = box.Text end
+end)
+
+-- Số dòng
+local lastLines = 0
+local function updateGutter()
+	local n = select(2, string.gsub(box.Text, "\n", "")) + 1
+	if n == lastLines then return end
+	lastLines = n
+	if n > 4000 then n = 4000 end
+	local t = table.create(n)
+	for i = 1, n do t[i] = tostring(i) end
+	gutter.Text = table.concat(t, "\n")
+end
+
+local function updateHeader()
+	if currentScript then
+		scriptTitle.Text = currentScript.name .. (dirty and " *" or "")
+	end
+end
+
+-- Thanh công cụ nổi ở đáy (mờ dần lên trên)
+local toolbar = new("Frame", {
+	AnchorPoint = Vector2.new(0, 1),
+	Position = UDim2.new(0, 0, 1, 0),
+	Size = UDim2.new(1, 0, 0, 62),
+	BackgroundColor3 = Color3.fromRGB(6, 8, 20),
+	BorderSizePixel = 0,
+	ZIndex = 3,
+}, editor)
+do
+	local g = Instance.new("UIGradient")
+	g.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.5, 0.2),
+		NumberSequenceKeypoint.new(1, 0.05),
+	})
+	g.Rotation = 90
+	g.Parent = toolbar
+end
+
+local function toolBtn(x, key)
+	local b = button(toolbar, {
+		Position = UDim2.fromOffset(x, 20),
+		Size = UDim2.fromOffset(46, 34),
+		TextSize = 11,
+		BackgroundColor3 = C.gray,
+	}, 10)
+	tr(b, key)
+	return b
+end
+local clearBtn = toolBtn(12, "ed_clear")
+local copyBtn = toolBtn(64, "ed_copy")
+local pasteBtn = toolBtn(116, "ed_paste")
+local outBtn = toolBtn(168, "ed_out")
+local runBtn = primaryButton(toolbar, {
+	Position = UDim2.fromOffset(222, 20),
+	Size = UDim2.fromOffset(70, 34),
+	TextSize = 13,
+}, 10)
+tr(runBtn, "run")
+
+-- Khung output trượt lên từ đáy
+local OUT_HIDDEN = UDim2.new(0, 8, 1, 10)
+local OUT_SHOWN = UDim2.new(0, 8, 1, -158)
+local outPanel = new("Frame", {
+	Position = OUT_HIDDEN,
+	Size = UDim2.new(1, -16, 0, 94),
+	BackgroundColor3 = Color3.fromRGB(8, 10, 24),
+	BackgroundTransparency = 0.04,
+	ZIndex = 5,
+}, editor)
+corner(outPanel, 12)
+stroke(outPanel, WHITE, 1, 0.88)
+local outScroll = new("ScrollingFrame", {
+	Position = UDim2.fromOffset(4, 4),
+	Size = UDim2.new(1, -8, 1, -8),
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	ScrollBarThickness = 3,
+	CanvasSize = UDim2.new(),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	ZIndex = 5,
+}, outPanel)
+local outLabel = label(outScroll, {
+	Position = UDim2.fromOffset(8, 4),
+	Size = UDim2.new(1, -40, 0, 0),
+	AutomaticSize = Enum.AutomaticSize.Y,
+	Font = Enum.Font.Code,
+	TextSize = 12,
+	TextColor3 = C.muted,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextYAlignment = Enum.TextYAlignment.Top,
+	TextWrapped = true,
+	ZIndex = 5,
+})
+tr(outLabel, "out_default")
+local outClose = button(outPanel, {
+	Position = UDim2.new(1, -30, 0, 6),
+	Size = UDim2.fromOffset(22, 22),
+	Text = "X",
+	TextSize = 10,
+	BackgroundColor3 = C.gray,
+	ZIndex = 6,
+}, 11)
+
+local outOpen = false
+local function setOut(open)
+	outOpen = open
+	tween(outPanel, open and 0.5 or 0.35, { Position = open and OUT_SHOWN or OUT_HIDDEN },
+		open and EASE.Back or EASE.Quint)
+end
+outClose.Activated:Connect(function() setOut(false) end)
+outBtn.Activated:Connect(function() setOut(not outOpen) end)
+
+local function showResult(ok, text)
+	outLabel.TextTransparency = 1
+	outLabel.TextColor3 = ok and Color3.fromRGB(150, 232, 176) or Color3.fromRGB(255, 134, 134)
+	outLabel.Text = text
+	tween(outLabel, 0.35, { TextTransparency = 0 }, EASE.Quad)
+	setOut(true)
+end
+
+-- Thực thi code ------------------------------------------------------
+local loader do
+	local ok, fn = pcall(function() return loadstring end)
+	if ok and type(fn) == "function" then loader = fn end
+end
+
+local function execute(code)
+	if not loader then
+		return false, S("no_loadstring")
+	end
+	if code == "" then
+		return false, S("empty")
+	end
+	local fn, err = loader(code, "AtomHub")
+	if not fn then
+		return false, tostring(err)
+	end
+
+	local output = {}
+	local function capture(prefix)
+		return function(...)
+			local parts = table.pack(...)
+			for i = 1, parts.n do parts[i] = tostring(parts[i]) end
+			table.insert(output, prefix .. table.concat(parts, "\t"))
+		end
+	end
+	local env = setmetatable({
+		print = capture(""),
+		warn = capture("[warn] "),
+		player = player,
+	}, { __index = getfenv(0) })
+	pcall(setfenv, fn, env)
+
+	local results = table.pack(pcall(fn))
+	if not results[1] then
+		table.insert(output, "[error] " .. tostring(results[2]))
+		return false, table.concat(output, "\n")
+	end
+	for i = 2, results.n do
+		table.insert(output, "=> " .. tostring(results[i]))
+	end
+	if #output == 0 then
+		table.insert(output, S("done"))
+	end
+	return true, table.concat(output, "\n")
+end
+
+local running = false
+runBtn.Activated:Connect(function()
+	if running then return end
+	running = true
+	runBtn.Text = "..."
+	local ok, success, text = pcall(execute, box.Text)
+	if ok then
+		showResult(success, tostring(text))
+		if success then
+			notify("Code", S("n_run_ok"), "success")
+		elseif not loader then
+			notify("Code", S("n_no_ls"), "error")
+		else
+			notify("Code", S("n_run_err"), "error")
+		end
+	else
+		showResult(false, "[error] " .. tostring(success))
+		notify("Code", S("n_run_err"), "error")
+	end
+	runBtn.Text = S("run")
+	running = false
+end)
+
+clearBtn.Activated:Connect(function()
+	box.Text = ""
+end)
+
+copyBtn.Activated:Connect(function()
+	if clipSet then
+		local ok = pcall(clipSet, box.Text)
+		notify("Code", ok and S("n_copied") or S("n_copy_fail"), ok and "success" or "error")
+	else
+		notify("Code", S("n_copy_fail"), "error")
+	end
+end)
+
+pasteBtn.Activated:Connect(function()
+	if clipGet then
+		local ok, txt = pcall(clipGet)
+		if ok and type(txt) == "string" then
+			box.Text = box.Text .. txt
+			return
+		end
+	end
+	notify("Code", S("n_paste_fail"), "warn")
+	box:CaptureFocus()
+end)
+
+-- Panel tệp tin bên phải ----------------------------------------------
+local files = new("Frame", {
+	Position = UDim2.fromOffset(312, 0),
+	Size = UDim2.fromOffset(136, 292),
+	BackgroundColor3 = C.dark,
+	BackgroundTransparency = 0.12,
+}, codePage)
+corner(files, 14)
+stroke(files, WHITE, 1.5, 0.88)
+
+local filesTitle = label(files, {
+	Position = UDim2.fromOffset(14, 10),
+	Size = UDim2.fromOffset(108, 22),
+	Font = Enum.Font.GothamBold,
+	TextSize = 15,
+	TextXAlignment = Enum.TextXAlignment.Left,
+})
+tr(filesTitle, "file_title")
+
+local search = new("TextBox", {
+	Position = UDim2.fromOffset(10, 38),
+	Size = UDim2.fromOffset(116, 28),
+	BackgroundColor3 = C.panel,
+	BackgroundTransparency = 0.4,
+	TextColor3 = C.text,
+	PlaceholderColor3 = C.muted,
+	Font = Enum.Font.GothamMedium,
+	TextSize = 12,
+	ClearTextOnFocus = false,
+	Text = "",
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, files)
+corner(search, 8)
+new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, search)
+tr(search, "search_ph", "PlaceholderText")
+
+local newBtn = button(files, {
+	Position = UDim2.fromOffset(10, 74), Size = UDim2.fromOffset(36, 30),
+	Text = "+", TextSize = 18, BackgroundColor3 = C.panel, BackgroundTransparency = 0.3,
+}, 9)
+local favBtn = button(files, {
+	Position = UDim2.fromOffset(50, 74), Size = UDim2.fromOffset(36, 30),
+	TextSize = 11, BackgroundColor3 = C.panel, BackgroundTransparency = 0.3,
+}, 9)
+tr(favBtn, "fav_short")
+local delBtn = button(files, {
+	Position = UDim2.fromOffset(90, 74), Size = UDim2.fromOffset(36, 30),
+	TextSize = 11, BackgroundColor3 = C.bad, BackgroundTransparency = 0.25,
+}, 9)
+tr(delBtn, "del_short")
+
+local listFrame = new("ScrollingFrame", {
+	Position = UDim2.fromOffset(6, 110),
+	Size = UDim2.fromOffset(124, 134),
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	ScrollBarThickness = 2,
+	CanvasSize = UDim2.new(),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y,
+}, files)
+new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, listFrame)
+
+-- Bộ lọc Tệp / Thích
+local fseg = new("Frame", {
+	Position = UDim2.fromOffset(10, 252),
+	Size = UDim2.fromOffset(116, 32),
+	BackgroundColor3 = C.panel,
+	BackgroundTransparency = 0.4,
+}, files)
+corner(fseg, 10)
+local fpill = new("Frame", {
+	Position = UDim2.fromOffset(3, 3),
+	Size = UDim2.fromOffset(54, 26),
+	BackgroundColor3 = WHITE,
+}, fseg)
+corner(fpill, 8)
+accentGrad(fpill, 0)
+local fAll = new("TextButton", {
+	Position = UDim2.fromOffset(3, 3), Size = UDim2.fromOffset(54, 26),
+	BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 12,
+	TextColor3 = C.dark, AutoButtonColor = false, ZIndex = 2,
+}, fseg)
+tr(fAll, "tab_files")
+local fFav = new("TextButton", {
+	Position = UDim2.fromOffset(59, 3), Size = UDim2.fromOffset(54, 26),
+	BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 12,
+	TextColor3 = C.muted, AutoButtonColor = false, ZIndex = 2,
+}, fseg)
+tr(fFav, "tab_favs")
+
+local function setFilter(fav)
+	filterFav = fav
+	tween(fpill, 0.45, { Position = UDim2.fromOffset(fav and 59 or 3, 3) }, EASE.Back)
+	tween(fAll, 0.25, { TextColor3 = fav and C.muted or C.dark }, EASE.Quad)
+	tween(fFav, 0.25, { TextColor3 = fav and C.dark or C.muted }, EASE.Quad)
+	renderList()
+end
+fAll.Activated:Connect(function() setFilter(false) end)
+fFav.Activated:Connect(function() setFilter(true) end)
+
+-- Lưu / tải -------------------------------------------------------------
+local function persist()
+	if not hasFS() then return false end
+	local data = { scripts = {}, current = currentScript and currentScript.id or nil, nextNum = nextNum }
+	for _, s in ipairs(scriptsData) do
+		table.insert(data.scripts, { id = s.id, name = s.name, code = s.code, fav = s.fav })
+	end
+	ensureFolder()
+	local ok = pcall(function()
+		writefile(SAVE_FILE, HttpService:JSONEncode(data))
+	end)
+	return ok
+end
+
+local function loadPersisted()
+	if not hasFS() then return end
+	local ok, data = pcall(function()
+		if isfile(SAVE_FILE) then
+			return HttpService:JSONDecode(readfile(SAVE_FILE))
+		end
+	end)
+	if ok and type(data) == "table" and type(data.scripts) == "table" then
+		for _, s in ipairs(data.scripts) do
+			idCounter += 1
+			local obj = {
+				id = tonumber(s.id) or idCounter,
+				name = tostring(s.name or "Script"),
+				code = tostring(s.code or ""),
+				fav = s.fav == true,
+			}
+			idCounter = math.max(idCounter, obj.id)
+			table.insert(scriptsData, obj)
+			if data.current ~= nil and obj.id == tonumber(data.current) then
+				currentScript = obj
+			end
+		end
+		nextNum = tonumber(data.nextNum) or (#scriptsData + 1)
+	end
+end
+
+local function newScript(name, code, silent)
+	idCounter += 1
+	local s = {
+		id = idCounter,
+		name = name or ("Script n." .. nextNum),
+		code = code or "",
+		fav = false,
+	}
+	if not name then nextNum += 1 end
+	table.insert(scriptsData, s)
+	selectScript(s)
+	persist()
+	if not silent then
+		notify(s.name, S("n_new"), "success")
+	end
+	return s
+end
+
+-- Danh sách tệp -----------------------------------------------------------
+local selRow
+renderList = function()
+	for _, c in ipairs(listFrame:GetChildren()) do
+		if c:IsA("GuiObject") then c:Destroy() end
+	end
+	selRow = nil
+	local q = string.lower(search.Text)
+	local order = 0
+	for _, s in ipairs(scriptsData) do
+		local match = (q == "") or string.find(string.lower(s.name), q, 1, true)
+		if match and (not filterFav or s.fav) then
+			order += 1
+			local selected = (s == currentScript)
+			local row = new("TextButton", {
+				Size = UDim2.new(1, -6, 0, 34),
+				BackgroundColor3 = selected and theme.accent or C.panel,
+				BackgroundTransparency = 1,
+				Text = "",
+				AutoButtonColor = false,
+				LayoutOrder = order,
+			}, listFrame)
+			corner(row, 10)
+			tween(row, 0.4, { BackgroundTransparency = selected and 0.15 or 0.5 }, EASE.Quad)
+			if selected then selRow = row end
+
+			label(row, {
+				Position = UDim2.fromOffset(10, 0),
+				Size = UDim2.new(1, selected and -42 or -24, 1, 0),
+				Text = s.name .. ((selected and dirty) and " *" or ""),
+				Font = Enum.Font.GothamBold,
+				TextSize = 12,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				TextColor3 = selected and C.dark or C.text,
+			})
+			if s.fav then
+				local dot = new("Frame", {
+					AnchorPoint = Vector2.new(1, 0.5),
+					Position = UDim2.new(1, selected and -32 or -10, 0.5, 0),
+					Size = UDim2.fromOffset(7, 7),
+					BackgroundColor3 = selected and C.dark or theme.accent,
+				}, row)
+				round(dot)
+			end
+			row.Activated:Connect(function()
+				if s ~= currentScript then selectScript(s) end
+			end)
+
+			if selected then
+				local ren = button(row, {
+					Position = UDim2.new(1, -28, 0.5, -10),
+					Size = UDim2.fromOffset(22, 20),
+					Text = "Aa",
+					TextSize = 10,
+					BackgroundColor3 = C.dark,
+				}, 6)
+				ren.Activated:Connect(function()
+					local tb = new("TextBox", {
+						Position = UDim2.fromOffset(4, 4),
+						Size = UDim2.new(1, -8, 1, -8),
+						BackgroundColor3 = C.dark,
+						Text = s.name,
+						TextColor3 = C.text,
+						Font = Enum.Font.GothamBold,
+						TextSize = 12,
+						ClearTextOnFocus = false,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						ZIndex = 6,
+					}, row)
+					corner(tb, 7)
+					new("UIPadding", { PaddingLeft = UDim.new(0, 6) }, tb)
+					tb:CaptureFocus()
+					tb.FocusLost:Connect(function()
+						local n = trim(tb.Text)
+						if n ~= "" then s.name = string.sub(n, 1, 24) end
+						updateHeader()
+						renderList()
+						persist()
+					end)
+				end)
+			end
+		end
+	end
+end
+
+onAccent(function()
+	if selRow then selRow.BackgroundColor3 = theme.accent end
+end)
+
+selectScript = function(s)
+	if currentScript then currentScript.code = box.Text end
+	currentScript = s
+	loading = true
+	box.Text = s.code
+	loading = false
+	dirty = false
+	editorScroll.CanvasPosition = Vector2.zero
+	updateGutter()
+	updateHeader()
+	renderList()
+end
+
+box:GetPropertyChangedSignal("Text"):Connect(function()
+	updateGutter()
+	if not loading and not dirty and currentScript then
+		dirty = true
+		updateHeader()
+		renderList()
+	end
+end)
+search:GetPropertyChangedSignal("Text"):Connect(function()
+	renderList()
+end)
+
+newBtn.Activated:Connect(function()
+	newScript()
+end)
+
+favBtn.Activated:Connect(function()
+	if not currentScript then return end
+	currentScript.fav = not currentScript.fav
+	renderList()
+	persist()
+	notify(currentScript.name, currentScript.fav and S("n_fav_on") or S("n_fav_off"), "info")
+end)
+
+delBtn.Activated:Connect(function()
+	if not currentScript then return end
+	local name = currentScript.name
+	for i, s in ipairs(scriptsData) do
+		if s == currentScript then
+			table.remove(scriptsData, i)
+			break
+		end
+	end
+	currentScript = nil
+	if #scriptsData == 0 then
+		newScript(nil, "", true)
+	else
+		selectScript(scriptsData[1])
+	end
+	persist()
+	notify(name, S("n_deleted"), "warn")
+end)
+
+saveBtn.Activated:Connect(function()
+	if not currentScript then return end
+	currentScript.code = box.Text
+	dirty = false
+	updateHeader()
+	renderList()
+	if persist() then
+		notify(currentScript.name, S("n_saved"), "success")
+	else
+		notify(currentScript.name, S("n_saved_mem"), "info")
+	end
+end)
+
+-- Khởi tạo danh sách
+loadPersisted()
+if #scriptsData == 0 then
+	newScript(nil, "", true)
+else
+	selectScript(currentScript or scriptsData[1])
+end
+
+----------------------------------------------------------------------
+-- TAB 3: Thư viện
+----------------------------------------------------------------------
+local libPage = pages[3]
+local libHint = label(libPage, {
+	Position = UDim2.fromOffset(4, 0),
+	Size = UDim2.new(1, 0, 0, 24),
+	TextSize = 13,
+	TextColor3 = C.muted,
+	TextXAlignment = Enum.TextXAlignment.Left,
+})
+tr(libHint, "lib_hint")
+
+local libList = new("ScrollingFrame", {
+	Position = UDim2.fromOffset(0, 30),
+	Size = UDim2.fromOffset(448, 262),
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	ScrollBarThickness = 3,
+	CanvasSize = UDim2.new(),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y,
+}, libPage)
+new("UIListLayout", { Padding = UDim.new(0, 8) }, libList)
+
+local SNIPPETS = {
+	{ "Print hello", "print('Hello from Atom Hub!')" },
+	{ "WalkSpeed 50", "local h = player.Character and player.Character:FindFirstChildOfClass('Humanoid')\nif h then h.WalkSpeed = 50 end\nprint('WalkSpeed = 50')" },
+	{ "JumpPower 100", "local h = player.Character and player.Character:FindFirstChildOfClass('Humanoid')\nif h then h.UseJumpPower = true h.JumpPower = 100 end\nprint('JumpPower = 100')" },
+	{ "Gravity 50", "workspace.Gravity = 50\nprint('Gravity = 50')" },
+	{ "Print position", "local r = player.Character and player.Character:FindFirstChild('HumanoidRootPart')\nprint(r and r.Position or 'no character')" },
+	{ "List players", "for _, p in ipairs(game.Players:GetPlayers()) do\n\tprint(p.Name)\nend" },
+}
+
+for _, snip in ipairs(SNIPPETS) do
+	local item = new("TextButton", {
+		Size = UDim2.new(1, -10, 0, 52),
+		BackgroundColor3 = C.panel,
+		BackgroundTransparency = 0.5,
+		Text = "",
+		AutoButtonColor = false,
+	}, libList)
+	corner(item, 12)
+	local st = stroke(item, WHITE, 1, 0.92)
+	label(item, {
+		Position = UDim2.fromOffset(16, 8),
+		Size = UDim2.new(1, -32, 0, 20),
+		Text = snip[1],
+		Font = Enum.Font.GothamBold,
+		TextSize = 14,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	})
+	label(item, {
+		Position = UDim2.fromOffset(16, 29),
+		Size = UDim2.new(1, -32, 0, 16),
+		Text = snip[2]:match("[^\n]*"),
+		Font = Enum.Font.Code,
+		TextSize = 11,
+		TextColor3 = C.muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	})
+	item.MouseEnter:Connect(function()
+		tween(item, 0.25, { BackgroundTransparency = 0.15 }, EASE.Quad)
+		tween(st, 0.25, { Transparency = 0.5, Color = theme.accent }, EASE.Quad)
+	end)
+	item.MouseLeave:Connect(function()
+		tween(item, 0.25, { BackgroundTransparency = 0.5 }, EASE.Quad)
+		tween(st, 0.25, { Transparency = 0.92, Color = WHITE }, EASE.Quad)
+	end)
+	item.Activated:Connect(function()
+		newScript(snip[1], snip[2], true)
+		selectTab(2)
+		notify(snip[1], S("n_lib"), "info")
+	end)
+end
+
+----------------------------------------------------------------------
+-- TAB 4: Công cụ
+----------------------------------------------------------------------
+local misc = pages[4]
+
+local function statCard(x, key)
+	local p = panel(misc, UDim2.fromOffset(x, 0), UDim2.fromOffset(144, 92))
+	local val = label(p, {
+		Position = UDim2.fromOffset(0, 12),
+		Size = UDim2.new(1, 0, 0, 44),
+		Font = Enum.Font.GothamBlack,
+		TextSize = 32,
+		Text = "0",
+		TextColor3 = WHITE,
+	})
+	accentGrad(val, 0)
+	local k = label(p, {
+		Position = UDim2.fromOffset(0, 60),
+		Size = UDim2.new(1, 0, 0, 20),
+		TextSize = 13,
+		TextColor3 = C.muted,
+	})
+	tr(k, key)
+	return val
+end
+
+local fpsVal = statCard(0, "fps")
+local pingVal = statCard(152, "ping")
+local plVal = statCard(304, "players")
+
+local srvPanel = panel(misc, UDim2.fromOffset(0, 100), UDim2.fromOffset(448, 80))
+local srvTitle = label(srvPanel, {
+	Position = UDim2.fromOffset(18, 14),
+	Size = UDim2.fromOffset(220, 22),
+	Font = Enum.Font.GothamBold,
+	TextSize = 16,
+	TextXAlignment = Enum.TextXAlignment.Left,
+})
+tr(srvTitle, "server_title")
+local srvDesc = label(srvPanel, {
+	Position = UDim2.fromOffset(18, 40),
+	Size = UDim2.fromOffset(220, 20),
+	TextSize = 12,
+	TextColor3 = C.muted,
+	TextXAlignment = Enum.TextXAlignment.Left,
+})
+tr(srvDesc, "server_desc")
+local rejoinBtn = primaryButton(srvPanel, {
+	Position = UDim2.new(1, -168, 0.5, -19),
+	Size = UDim2.fromOffset(150, 38),
+})
+tr(rejoinBtn, "rejoin")
+rejoinBtn.Activated:Connect(function()
+	notify("Atom Hub", S("n_rejoin"), "warn")
+	pcall(function()
+		TeleportService:Teleport(game.PlaceId, player)
+	end)
+end)
+
+local infoPanel = panel(misc, UDim2.fromOffset(0, 188), UDim2.fromOffset(448, 104))
+local function infoRow(y, key, value)
+	local k = label(infoPanel, {
+		Position = UDim2.fromOffset(18, y),
+		Size = UDim2.fromOffset(120, 24),
+		TextSize = 13,
+		TextColor3 = C.muted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	})
+	tr(k, key)
+	label(infoPanel, {
+		Position = UDim2.fromOffset(150, y),
+		Size = UDim2.fromOffset(280, 24),
+		Text = value,
+		Font = Enum.Font.Code,
+		TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	})
+end
+infoRow(12, "info_place", tostring(game.PlaceId))
+infoRow(40, "info_server", (game.JobId ~= "" and string.sub(game.JobId, 1, 13) or "Studio"))
+infoRow(68, "info_ver", "Atom Hub 1.0")
+
+local frames, acc = 0, 0
+local fpsConn = RunService.RenderStepped:Connect(function(dt)
+	frames += 1
+	acc += dt
+	if acc >= 0.5 then
+		local fps = math.floor(frames / acc + 0.5)
+		local players = #Players:GetPlayers()
+		local ok, ping = pcall(function()
+			return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+		end)
+		local pingText = ok and tostring(math.floor(ping + 0.5)) or "--"
+		fpsVal.Text = tostring(fps)
+		pingVal.Text = pingText
+		plVal.Text = tostring(players)
+		heroFps.Text = fps .. " FPS"
+		heroPing.Text = pingText .. " ms"
+		frames, acc = 0, 0
+	end
+end)
+
+----------------------------------------------------------------------
+-- TAB 5: Cài đặt
+----------------------------------------------------------------------
+local setPage = pages[5]
+local setPanel = panel(setPage, UDim2.fromOffset(0, 0), UDim2.fromOffset(448, 200))
+
+local langLbl = label(setPanel, {
+	Position = UDim2.fromOffset(22, 22),
+	Size = UDim2.fromOffset(130, 38),
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Font = Enum.Font.GothamBold,
+})
+tr(langLbl, "lang")
+
+local seg = new("Frame", {
+	Position = UDim2.fromOffset(160, 22),
+	Size = UDim2.fromOffset(188, 38),
+	BackgroundColor3 = C.dark,
+}, setPanel)
+corner(seg, 12)
+local segPill = new("Frame", {
+	Position = UDim2.fromOffset(4, 4),
+	Size = UDim2.fromOffset(88, 30),
+	BackgroundColor3 = WHITE,
+}, seg)
+corner(segPill, 9)
+accentGrad(segPill, 0)
+
+local segButtons = {}
+local function moveSeg(instant)
+	local idx = (lang == "vi") and 1 or 2
+	local target = UDim2.fromOffset(4 + (idx - 1) * 92, 4)
+	if instant then
+		segPill.Position = target
+	else
+		tween(segPill, 0.45, { Position = target }, EASE.Back)
+	end
+	for code, b in pairs(segButtons) do
+		local selected = (code == lang)
+		tween(b, instant and 0 or 0.25, { TextColor3 = selected and C.dark or C.muted }, EASE.Quad)
+	end
+end
+
+for i, code in ipairs({ "vi", "en" }) do
+	local b = new("TextButton", {
+		Position = UDim2.fromOffset(4 + (i - 1) * 92, 4),
+		Size = UDim2.fromOffset(88, 30),
+		BackgroundTransparency = 1,
+		Text = code == "vi" and "Tiếng Việt" or "English",
+		Font = Enum.Font.GothamBold,
+		TextSize = 12,
+		TextColor3 = C.muted,
+		AutoButtonColor = false,
+		ZIndex = 2,
+	}, seg)
+	segButtons[code] = b
+	b.Activated:Connect(function()
+		if lang == code then return end
+		lang = code
+		applyLang()
+		moveSeg()
+		notify("Atom Hub", S("n_lang"), "success")
+	end)
+end
+
+local accLbl = label(setPanel, {
+	Position = UDim2.fromOffset(22, 84),
+	Size = UDim2.fromOffset(130, 38),
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Font = Enum.Font.GothamBold,
+})
+tr(accLbl, "accent")
+
+local COLORS = {
+	Color3.fromRGB(0, 198, 255),
+	Color3.fromRGB(140, 100, 255),
+	Color3.fromRGB(30, 214, 140),
+	Color3.fromRGB(255, 90, 170),
+	Color3.fromRGB(255, 170, 40),
+	Color3.fromRGB(255, 84, 104),
+}
+
+local function swatchCenter(i)
+	return UDim2.fromOffset(160 + (i - 1) * 44 + 17, 84 + 19)
+end
+
+local swatchRing = new("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = swatchCenter(1),
+	Size = UDim2.fromOffset(44, 44),
+	BackgroundTransparency = 1,
+	ZIndex = 3,
+}, setPanel)
+round(swatchRing)
+stroke(swatchRing, WHITE, 2, 0)
+
+for i, c in ipairs(COLORS) do
+	local sw = new("TextButton", {
+		Position = UDim2.fromOffset(160 + (i - 1) * 44, 84 + 2),
+		Size = UDim2.fromOffset(34, 34),
+		BackgroundColor3 = c,
+		Text = "",
+		AutoButtonColor = false,
+	}, setPanel)
+	round(sw)
+	local sc = Instance.new("UIScale")
+	sc.Parent = sw
+	sw.MouseEnter:Connect(function() tween(sc, 0.2, { Scale = 1.12 }) end)
+	sw.MouseLeave:Connect(function() tween(sc, 0.2, { Scale = 1 }) end)
+	sw.Activated:Connect(function()
+		tween(swatchRing, 0.5, { Position = swatchCenter(i) }, EASE.Back)
+		setAccent(c)
+		notify("Atom Hub", S("n_color"), "success")
+	end)
+end
+
+local destroyBtn = button(setPanel, {
+	Position = UDim2.fromOffset(22, 144),
+	Size = UDim2.fromOffset(170, 38),
+	BackgroundColor3 = C.bad,
+})
+tr(destroyBtn, "destroy")
+destroyBtn.Activated:Connect(function()
+	for id in pairs(active) do
+		if active[id] then feats[id](false) end
+	end
+	fpsConn:Disconnect()
+	atomConn:Disconnect()
+	closeMenu()
+	task.delay(0.4, function()
+		gui:Destroy()
+	end)
+end)
+
+----------------------------------------------------------------------
+-- Màn hình loading nguyên tử (lần mở menu đầu tiên)
+----------------------------------------------------------------------
+local function runLoading()
+	local overlay = new("CanvasGroup", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		ZIndex = 50,
+		Active = true,
+	}, main)
+	bgFill(overlay, Color3.fromRGB(18, 20, 46), Color3.fromRGB(5, 6, 16), 120)
+	local overlayScale = new("UIScale", { Scale = 1 }, overlay)
+	makeDraggable(overlay, root)
+
+	-- sóng lan tỏa quanh nguyên tử
+	local CX, CY = 0.5, 108
+	local rings = {}
+	for i = 1, 2 do
+		local r = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(CX, 0, 0, CY),
+			Size = UDim2.fromOffset(120, 120),
+			BackgroundTransparency = 1,
+		}, overlay)
+		round(r)
+		accent(stroke(r, theme.accent, 2, 0.3), "Color")
+		local tw = TweenService:Create(
+			r,
+			TweenInfo.new(2.4, EASE.Quad, DIR.Out, -1, false, (i - 1) * 1.2),
+			{ Size = UDim2.fromOffset(260, 260) }
+		)
+		local st = r:FindFirstChildOfClass("UIStroke")
+		local tw2 = TweenService:Create(
+			st,
+			TweenInfo.new(2.4, EASE.Quad, DIR.Out, -1, false, (i - 1) * 1.2),
+			{ Transparency = 1 }
+		)
+		tw:Play()
+		tw2:Play()
+		table.insert(rings, { tw, tw2 })
+	end
+
+	local atom = makeAtom(overlay, 116, {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(CX, 0, 0, CY),
+		ZIndex = 3,
+	}, { spin = 8, speed = 1.4 })
+	local atomScale = new("UIScale", { Scale = 0.3 }, atom)
+	tween(atomScale, 0.9, { Scale = 1 }, EASE.Back)
+
+	-- chữ ATOM HUB hiện từng chữ
+	local letters = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 184),
+		Size = UDim2.fromOffset(300, 44),
+		BackgroundTransparency = 1,
+	}, overlay)
+	new("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		Padding = UDim.new(0, 2),
+	}, letters)
+	local chars = { "A", "T", "O", "M", " ", "H", "U", "B" }
+	for i, ch in ipairs(chars) do
+		local isSpace = (ch == " ")
+		local l = label(letters, {
+			Size = UDim2.fromOffset(isSpace and 14 or 28, 44),
+			Text = ch,
+			Font = Enum.Font.GothamBlack,
+			TextSize = 32,
+			TextColor3 = WHITE,
+			TextTransparency = 1,
+			LayoutOrder = i,
+		})
+		if not isSpace then
+			accentGrad(l, 0)
+			local ls = new("UIScale", { Scale = 0.4 }, l)
+			task.delay(0.35 + i * 0.07, function()
+				tween(l, 0.5, { TextTransparency = 0 }, EASE.Quad)
+				tween(ls, 0.6, { Scale = 1 }, EASE.Back)
+			end)
+		end
+	end
+
+	local status = label(overlay, {
+		Position = UDim2.new(0, 0, 0, 240),
+		Size = UDim2.new(1, 0, 0, 20),
+		TextSize = 13,
+		TextColor3 = C.muted,
+		Text = S("load_1"),
+	})
+
+	local track = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 272),
+		Size = UDim2.fromOffset(300, 6),
+		BackgroundColor3 = C.dark,
+	}, overlay)
+	round(track)
+	local fill = new("Frame", {
+		Size = UDim2.new(0, 0, 1, 0),
+		BackgroundColor3 = WHITE,
+		BorderSizePixel = 0,
+	}, track)
+	round(fill)
+	accentGrad(fill, 0)
+
+	local pctLbl = label(overlay, {
+		Position = UDim2.new(0, 0, 0, 286),
+		Size = UDim2.new(1, 0, 0, 18),
+		TextSize = 12,
+		Font = Enum.Font.Code,
+		TextColor3 = C.muted,
+		Text = "0%",
+	})
+
+	local pctVal = Instance.new("NumberValue")
+	pctVal.Changed:Connect(function(v)
+		fill.Size = UDim2.new(v / 100, 0, 1, 0)
+		pctLbl.Text = math.floor(v) .. "%"
+		if v < 35 then
+			status.Text = S("load_1")
+		elseif v < 70 then
+			status.Text = S("load_2")
+		elseif v < 99.5 then
+			status.Text = S("load_3")
+		else
+			status.Text = S("load_4")
+		end
+	end)
+
+	task.spawn(function()
+		local t = tween(pctVal, 2.8, { Value = 100 }, EASE.Sine, DIR.InOut)
+		t.Completed:Wait()
+		if not gui.Parent then return end
+		task.wait(0.35)
+		if not gui.Parent then return end
+		for _, pair in ipairs(rings) do
+			pair[1]:Cancel()
+			pair[2]:Cancel()
+		end
+		tween(atomScale, 0.6, { Scale = 1.5 }, EASE.Quint)
+		tween(overlayScale, 0.6, { Scale = 1.05 }, EASE.Quint)
+		tween(overlay, 0.55, { GroupTransparency = 1 }, EASE.Quad)
+		stagger(pages[1])
+		task.wait(0.6)
+		if not gui.Parent then return end
+		overlay:Destroy()
+		notify("Atom Hub", S("n_ready"), "success")
+		task.delay(0.9, function()
+			notify("Atom Hub", S("n_hint"), "info")
+		end)
+	end)
+end
+
+----------------------------------------------------------------------
+-- Hệ thống key
+----------------------------------------------------------------------
+local KEY_FILE = "AtomHub/key.txt"
+
+local function normalizeKey(k)
+	return string.upper(trim(tostring(k or "")))
+end
+
+local remoteKeys
+local function fetchRemoteKeys()
+	if CONFIG.REMOTE_KEYS_URL == "" then return nil end
+	if remoteKeys then return remoteKeys end
+	local ok, res = pcall(function()
+		return game:HttpGet(CONFIG.REMOTE_KEYS_URL)
+	end)
+	if ok and type(res) == "string" then
+		remoteKeys = {}
+		for line in string.gmatch(res, "[^\r\n]+") do
+			local k = normalizeKey(line)
+			if k ~= "" then remoteKeys[k] = true end
+		end
+		return remoteKeys
+	end
+	return nil
+end
+
+-- trả về: hợp lệ?, mã chuỗi lý do (nếu sai)
+local function checkKey(raw)
+	local key = normalizeKey(raw)
+	if key == "" then return false, "key_empty" end
+	local remote = fetchRemoteKeys()
+	if remote and remote[key] then return true end
+	for k, v in pairs(CONFIG.KEYS) do
+		if normalizeKey(k) == key then
+			if v == true then return true end
+			if type(v) == "number" then
+				if os.time() <= v then return true end
+				return false, "key_expired"
+			end
+		end
+	end
+	return false, "key_bad"
+end
+
+local function saveKey(k)
+	if not (CONFIG.REMEMBER_KEY and hasFS()) then return end
+	ensureFolder()
+	pcall(function() writefile(KEY_FILE, k) end)
+end
+
+local function loadSavedKey()
+	if not (CONFIG.REMEMBER_KEY and hasFS()) then return nil end
+	local ok, res = pcall(function()
+		if isfile(KEY_FILE) then return readfile(KEY_FILE) end
+	end)
+	if ok and type(res) == "string" then return res end
+	return nil
+end
+
+local function runKeyGate(onSuccess)
+	local KW, KH = 380, 300
+
+	local keyRoot = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 24),
+		Size = UDim2.fromOffset(KW, KH),
+		BackgroundTransparency = 1,
+		ZIndex = 15,
+	}, gui)
+	local keyScale = new("UIScale", { Scale = 0.9 }, keyRoot)
+	local fit, ready = 1, false
+	local function updateFit()
+		local vp = gui.AbsoluteSize
+		if vp.X > 0 and vp.Y > 0 then
+			fit = math.clamp(math.min(vp.X * 0.9 / KW, vp.Y * 0.8 / KH), 0.4, 1.2)
+			if ready then keyScale.Scale = fit end
+		end
+	end
+	updateFit()
+	gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateFit)
+
+	-- bóng + quầng sáng
+	local kShadows = {}
+	for i = 1, 2 do
+		local base = (i == 2) and 0.93 or 0.9
+		local s = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, 0, 0.5, 6),
+			Size = UDim2.new(1, i * 12, 1, i * 12),
+			BackgroundColor3 = (i == 2) and theme.accent or BLACK,
+			BackgroundTransparency = 1,
+			ZIndex = 1,
+		}, keyRoot)
+		corner(s, 18 + i * 8)
+		if i == 2 then accent(s, "BackgroundColor3") end
+		table.insert(kShadows, { s, base })
+	end
+
+	local body = new("CanvasGroup", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		GroupTransparency = 1,
+		ZIndex = 2,
+		Active = true,
+	}, keyRoot)
+	corner(body, 18)
+	bgFill(body, C.bgTop, C.bgBot, 120)
+	makeDraggable(body, keyRoot)
+
+	local kBorder = new("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		ZIndex = 3,
+	}, keyRoot)
+	corner(kBorder, 18)
+	local kStroke = stroke(kBorder, WHITE, 2, 1)
+	local kGrad = Instance.new("UIGradient")
+	kGrad.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(0.25, 0.5),
+		NumberSequenceKeypoint.new(0.5, 1),
+		NumberSequenceKeypoint.new(0.75, 0.5),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	kGrad.Parent = kStroke
+	onAccent(function()
+		kGrad.Color = ColorSequence.new(theme.accent:Lerp(WHITE, 0.3), accent2())
+	end)
+	local kSpin = TweenService:Create(
+		kGrad, TweenInfo.new(6, EASE.Linear, DIR.Out, -1), { Rotation = 360 }
+	)
+	kSpin:Play()
+
+	-- nội dung
+	makeAtom(body, 72, {
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 16),
+	}, { spin = 14 })
+
+	local title = label(body, {
+		Position = UDim2.new(0, 0, 0, 94),
+		Size = UDim2.new(1, 0, 0, 30),
+		Text = "ATOM HUB",
+		Font = Enum.Font.GothamBlack,
+		TextSize = 26,
+		TextColor3 = WHITE,
+	})
+	accentGrad(title, 0)
+	local sub = label(body, {
+		Position = UDim2.new(0, 0, 0, 126),
+		Size = UDim2.new(1, 0, 0, 20),
+		TextSize = 13,
+		TextColor3 = C.muted,
+	})
+	tr(sub, "key_sub")
+
+	local inputWrap = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 160),
+		Size = UDim2.fromOffset(300, 42),
+		BackgroundColor3 = C.dark,
+		BackgroundTransparency = 0.1,
+	}, body)
+	corner(inputWrap, 12)
+	local inStroke = stroke(inputWrap, WHITE, 1.5, 0.88)
+	local input = new("TextBox", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = "",
+		TextColor3 = C.text,
+		PlaceholderColor3 = C.muted,
+		Font = Enum.Font.Code,
+		TextSize = 15,
+		ClearTextOnFocus = false,
+	}, inputWrap)
+	tr(input, "key_ph", "PlaceholderText")
+	input.Focused:Connect(function()
+		tween(inStroke, 0.3, { Color = theme.accent, Transparency = 0 }, EASE.Quad)
+	end)
+	input.FocusLost:Connect(function()
+		tween(inStroke, 0.3, { Color = WHITE, Transparency = 0.88 }, EASE.Quad)
+	end)
+
+	local status = label(body, {
+		Position = UDim2.new(0, 16, 0, 210),
+		Size = UDim2.new(1, -32, 0, 20),
+		TextSize = 12,
+		TextColor3 = C.muted,
+		Text = "",
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	})
+	local function setStatus(text, color)
+		status.Text = text
+		status.TextColor3 = color or C.muted
+	end
+
+	local verifyBtn = primaryButton(body, {
+		Position = UDim2.fromOffset(40, 242),
+		Size = UDim2.fromOffset(190, 40),
+	})
+	tr(verifyBtn, "key_verify")
+	local getBtn = button(body, {
+		Position = UDim2.fromOffset(238, 242),
+		Size = UDim2.fromOffset(102, 40),
+		TextSize = 13,
+	})
+	tr(getBtn, "key_get")
+	local langBtn = button(body, {
+		Position = UDim2.fromOffset(KW - 12 - 44, 12),
+		Size = UDim2.fromOffset(44, 24),
+		Text = string.upper(lang),
+		TextSize = 11,
+		BackgroundColor3 = C.gray,
+	}, 8)
+	langBtn.Activated:Connect(function()
+		lang = (lang == "vi") and "en" or "vi"
+		applyLang()
+		moveSeg()
+		langBtn.Text = string.upper(lang)
+	end)
+
+	-- mở cửa sổ key
+	keyScale.Scale = fit * 0.9
+	tween(keyScale, 0.6, { Scale = fit }, EASE.Exponential)
+	tween(body, 0.5, { GroupTransparency = 0 }, EASE.Quad)
+	tween(kStroke, 0.5, { Transparency = 0 }, EASE.Quad)
+	for _, s in ipairs(kShadows) do
+		tween(s[1], 0.5, { BackgroundTransparency = s[2] }, EASE.Quad)
+	end
+	task.delay(0.6, function() ready = true end)
+
+	local function shake()
+		task.spawn(function()
+			local base = keyRoot.Position
+			for _, dx in ipairs({ -14, 12, -9, 6, -3, 0 }) do
+				tween(keyRoot, 0.05, { Position = base + UDim2.fromOffset(dx, 0) }, EASE.Quad)
+				task.wait(0.05)
+			end
+		end)
+	end
+
+	local attempts, lockedUntil, busy, passed = 0, 0, false, false
+
+	local function verify()
+		if busy or passed or os.clock() < lockedUntil then return end
+		busy = true
+		setStatus(S("key_checking"), C.muted)
+		task.spawn(function()
+			task.wait(0.35)
+			local raw = input.Text
+			local ok, reason = checkKey(raw)
+			if ok then
+				passed = true
+				setStatus(S("key_ok"), C.good)
+				tween(inStroke, 0.3, { Color = C.good, Transparency = 0 }, EASE.Quad)
+				saveKey(normalizeKey(raw))
+				task.wait(0.8)
+				ready = false
+				kSpin:Cancel()
+				tween(keyScale, 0.5, { Scale = fit * 1.06 }, EASE.Quint)
+				tween(body, 0.45, { GroupTransparency = 1 }, EASE.Quad)
+				tween(kStroke, 0.45, { Transparency = 1 }, EASE.Quad)
+				for _, s in ipairs(kShadows) do
+					tween(s[1], 0.45, { BackgroundTransparency = 1 }, EASE.Quad)
+				end
+				task.wait(0.5)
+				keyRoot:Destroy()
+				onSuccess()
+				return
+			end
+
+			attempts += 1
+			setStatus(S(reason or "key_bad"), C.bad)
+			tween(inStroke, 0.2, { Color = C.bad, Transparency = 0 }, EASE.Quad)
+			shake()
+			task.delay(0.9, function()
+				if not passed then
+					tween(inStroke, 0.4, { Color = WHITE, Transparency = 0.88 }, EASE.Quad)
+				end
+			end)
+			if attempts >= CONFIG.MAX_ATTEMPTS then
+				attempts = 0
+				lockedUntil = os.clock() + CONFIG.COOLDOWN
+				task.spawn(function()
+					while os.clock() < lockedUntil and keyRoot.Parent do
+						setStatus(string.format(S("key_wait"), math.ceil(lockedUntil - os.clock())), C.warn)
+						task.wait(0.25)
+					end
+					if keyRoot.Parent and not passed then setStatus("", C.muted) end
+				end)
+			end
+			busy = false
+		end)
+	end
+
+	verifyBtn.Activated:Connect(verify)
+	input.FocusLost:Connect(function(enterPressed)
+		if enterPressed then verify() end
+	end)
+
+	getBtn.Activated:Connect(function()
+		local url = CONFIG.GET_KEY_URL
+		if clipSet then
+			pcall(clipSet, url)
+			notify("Atom Hub", S("key_copied"), "success")
+		else
+			notify("Atom Hub", url, "info")
+		end
+		setStatus(url, C.muted)
+	end)
+end
+
+----------------------------------------------------------------------
+-- Khởi động
+----------------------------------------------------------------------
+local function unlock()
+	unlocked = true
+	toggleHolder.Visible = true
+	toggleScale.Scale = 0.2
+	tween(toggleScale, 0.7, { Scale = 1 }, EASE.Back)
+	openMenu()
+	runLoading()
+end
+
+applyLang()
+moveSeg(true)
+selectTab(1, true)
+toggleHolder.Visible = false
+
+if not CONFIG.KEY_SYSTEM then
+	unlock()
+else
+	local saved = loadSavedKey()
+	if saved and saved ~= "" and checkKey(saved) then
+		unlock()
+	else
+		runKeyGate(unlock)
+	end
+end
