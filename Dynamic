@@ -1,0 +1,1538 @@
+--[[
+	╔══════════════════════════════════════════════╗
+	║   DYNAMIC TEST  •  iOS 27 STYLE  •  v2       ║
+	╚══════════════════════════════════════════════╝
+
+	ĐIỀU KHIỂN
+	  • CHẠM vào đảo            : mở  ⇄  đóng (giống iPhone)
+	  • Vuốt trái / phải        : đổi trang khi đang mở (hoặc chạm vào chấm tròn)
+	  • Vuốt lên / xuống        : đóng / mở
+	  • GIỮ ~0.5s vào đảo       : mở / đóng bảng TEST THÔNG BÁO
+	  • Nút chuông 🔔 (kéo được): mở / đóng bảng TEST THÔNG BÁO
+	  • Khi có thông báo        : chạm để tắt sớm
+
+	TRANG: Hiệu năng (FPS / Ping / RAM) • Hồ sơ người chơi • Đồng hồ + thời gian phiên
+
+	API (dùng từ script khác):
+	  local DI = getgenv().DynamicTest        -- (getgenv().DynamicIsland vẫn dùng được)
+	  DI.Notify("Tiêu đề", "Nội dung", {kind="success", duration=3})
+	      kind: "info" | "success" | "warn" | "error"
+	      tuỳ chọn: color=Color3, glyph="★", userId=123456 (hiện avatar), duration=giây
+	  DI.Expand(1) / DI.Collapse() / DI.Toggle()
+	  DI.OpenPanel() / DI.ClosePanel() / DI.TogglePanel()
+	  DI.SetLanguage("vi"|"en") / DI.SetRestMode("compact"|"idle") / DI.Destroy()
+]]
+
+------------------------------------------------------------------
+-- CẤU HÌNH
+------------------------------------------------------------------
+local CONFIG = {
+	Language       = "vi",       -- "vi" | "en"
+	RestMode       = "compact",  -- "compact" (FPS/Ping) | "idle" (viên thuốc trống)
+	TopOffset      = 10,         -- khoảng cách từ mép trên màn hình
+	AutoCollapse   = 0,          -- tự đóng sau X giây khi đang mở (0 = tắt)
+	PlayerNotifs   = true,       -- báo người chơi vào / rời server
+	StartupNotif   = true,       -- thông báo khi khởi động
+	ShowTestButton = true,       -- nút chuông mở bảng test
+	LoadingImage   = "rbxassetid://75395222076100",         -- hình vuông bo tròn ở màn load: "rbxassetid://ID" / số ID / link ảnh (http...)
+	LoadingImageAssetId = 127831842001296, -- Asset ID (số còn lại) — dùng làm phương án dự phòng (thumbnail)
+	UseEmbeddedLogo = true,      -- ưu tiên logo nhúng sẵn trong script (cần executor có writefile + getcustomasset)
+	LoadingTime    = 2,          -- thời gian load tối thiểu (giây)
+}
+
+------------------------------------------------------------------
+-- DỊCH VỤ
+------------------------------------------------------------------
+local Players          = game:GetService("Players")
+local TweenService     = game:GetService("TweenService")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Stats            = game:GetService("Stats")
+local ContentProvider  = game:GetService("ContentProvider")
+local CoreGui          = game:GetService("CoreGui")
+
+local lp = Players.LocalPlayer
+local genv = (typeof(getgenv) == "function" and getgenv()) or _G
+
+for _, key in ipairs({ "DynamicTest", "DynamicIsland" }) do
+	if genv[key] and genv[key].Destroy then
+		pcall(genv[key].Destroy)
+	end
+end
+
+------------------------------------------------------------------
+-- MÀU, BỐ CỤC, NGÔN NGỮ
+------------------------------------------------------------------
+local COL = {
+	white  = Color3.fromRGB(255, 255, 255),
+	green  = Color3.fromRGB(52, 199, 89),
+	yellow = Color3.fromRGB(255, 204, 0),
+	red    = Color3.fromRGB(255, 59, 48),
+	blue   = Color3.fromRGB(10, 132, 255),
+	orange = Color3.fromRGB(255, 149, 0),
+	gray   = Color3.fromRGB(142, 142, 147),
+	dim    = Color3.fromRGB(90, 90, 95),
+	tile   = Color3.fromRGB(28, 28, 30),
+	track  = Color3.fromRGB(58, 58, 60),
+	row    = Color3.fromRGB(44, 44, 46),
+}
+
+local LAYOUT = { -- {rộng, cao}
+	idle    = { 126, 37 },
+	compact = { 224, 37 },
+	stats   = { 340, 134 },
+	player  = { 340, 118 },
+	clock   = { 340, 118 },
+	notify  = { 340, 100 },
+}
+local ORDER = { "stats", "player", "clock" }
+
+local LANG = {
+	vi = {
+		loading = "Đang tải…", imgFail = "Không tải được logo", imgFailHint = "Kiểm tra ID ảnh hoặc ảnh còn chờ duyệt", fps = "FPS", ping = "ĐỘ TRỄ", mem = "BỘ NHỚ", session = "PHIÊN", players = "NGƯỜI CHƠI",
+		acct = "Tài khoản %d ngày tuổi", joined = "đã vào server", left = "đã rời server",
+		ready = "Dynamic Test sẵn sàng", hint = "Chạm để mở/đóng • Giữ để mở bảng test",
+		wd = { "Chủ nhật", "Thứ hai", "Thứ ba", "Thứ tư", "Thứ năm", "Thứ sáu", "Thứ bảy" },
+		-- bảng test
+		tpTitle = "Test thông báo", phTitle = "Tiêu đề", phBody = "Nội dung",
+		kInfo = "Thông tin", kOk = "Thành công", kWarn = "Cảnh báo", kErr = "Lỗi",
+		dur = "Thời gian hiển thị", avatarSw = "Kèm avatar của tôi",
+		send = "Gửi thông báo", send3 = "Gửi 3 thông báo liên tiếp",
+		pg1 = "Hiệu năng", pg2 = "Hồ sơ", pg3 = "Đồng hồ", collapse = "Thu gọn",
+		settings = "CÀI ĐẶT", sCompact = "Hiện FPS/Ping khi nghỉ", sJoin = "Báo người vào/rời", sLang = "Tiếng Việt",
+		defTitle = "Thông báo thử", defBody = "Đây là thông báo test từ bảng điều khiển",
+	},
+	en = {
+		loading = "Loading…", imgFail = "Couldn't load logo", imgFailHint = "Check the image ID or moderation status", fps = "FPS", ping = "PING", mem = "MEMORY", session = "SESSION", players = "PLAYERS",
+		acct = "Account %d days old", joined = "joined the server", left = "left the server",
+		ready = "Dynamic Test ready", hint = "Tap to open/close • Hold for test panel",
+		wd = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" },
+		tpTitle = "Notification test", phTitle = "Title", phBody = "Message",
+		kInfo = "Info", kOk = "Success", kWarn = "Warning", kErr = "Error",
+		dur = "Display time", avatarSw = "Include my avatar",
+		send = "Send notification", send3 = "Send 3 in a row",
+		pg1 = "Stats", pg2 = "Profile", pg3 = "Clock", collapse = "Collapse",
+		settings = "SETTINGS", sCompact = "Show FPS/Ping at rest", sJoin = "Join/leave alerts", sLang = "Vietnamese",
+		defTitle = "Test notification", defBody = "This is a test from the control panel",
+	},
+}
+local function T() return LANG[CONFIG.Language] or LANG.vi end
+
+------------------------------------------------------------------
+-- TIỆN ÍCH
+------------------------------------------------------------------
+local function new(class, props, parent)
+	local o = Instance.new(class)
+	for k, v in pairs(props) do o[k] = v end
+	if parent then o.Parent = parent end
+	return o
+end
+
+local EZ = Enum.EasingStyle
+local function tw(obj, t, props, style, dir)
+	local tween = TweenService:Create(obj, TweenInfo.new(t, style or EZ.Quint, dir or Enum.EasingDirection.Out), props)
+	tween:Play()
+	return tween
+end
+
+local function text(parent, props)
+	local d = {
+		BackgroundTransparency = 1, BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold, TextColor3 = COL.white, TextSize = 14, Text = "",
+		TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center,
+	}
+	for k, v in pairs(props) do d[k] = v end
+	return new("TextLabel", d, parent)
+end
+
+local function round(obj, r)
+	return new("UICorner", { CornerRadius = r or UDim.new(1, 0) }, obj)
+end
+
+local function mount(gui)
+	local candidates = {}
+	if typeof(gethui) == "function" then
+		local ok, ui = pcall(gethui)
+		if ok and ui then table.insert(candidates, ui) end
+	end
+	table.insert(candidates, CoreGui)
+	for _, p in ipairs(candidates) do
+		local ok = pcall(function() gui.Parent = p end)
+		if ok and gui.Parent == p then return end
+	end
+	gui.Parent = lp:WaitForChild("PlayerGui")
+end
+
+local function isPointer(input)
+	local t = input.UserInputType
+	return t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch
+end
+
+local function fmtDur(s)
+	s = math.floor(s)
+	local h, m, sec = math.floor(s / 3600), math.floor((s % 3600) / 60), s % 60
+	if h > 0 then return string.format("%d:%02d:%02d", h, m, sec) end
+	return string.format("%d:%02d", m, sec)
+end
+
+local function getPing()
+	local ok, v = pcall(function() return Stats.Network.ServerStatsItem["Data Ping"]:GetValue() end)
+	return (ok and v) and math.floor(v + 0.5) or 0
+end
+
+local function fpsColor(f) return f >= 50 and COL.green or (f >= 30 and COL.yellow or COL.red) end
+local function pingColor(p) return p <= 80 and COL.green or (p <= 150 and COL.yellow or COL.red) end
+
+-- Lò xo (hiệu ứng nảy kiểu iOS)
+local function spring(p, freq, damp) return { p = p, v = 0, t = p, f = freq, d = damp } end
+local function step(s, dt)
+	local w = s.f * 2 * math.pi
+	local h = dt / 3
+	for _ = 1, 3 do
+		local a = -w * w * (s.p - s.t) - 2 * s.d * w * s.v
+		s.v += a * h
+		s.p += s.v * h
+	end
+end
+
+local alive = true
+local conns = {}
+local binders = {}
+local function bind(fn) table.insert(binders, fn); fn() end
+
+------------------------------------------------------------------
+-- GIAO DIỆN: ĐẢO
+------------------------------------------------------------------
+local gui = new("ScreenGui", {
+	Name = "DynamicTest", IgnoreGuiInset = true, ResetOnSpawn = false,
+	DisplayOrder = 2147483647, ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+})
+pcall(function() if syn and syn.protect_gui then syn.protect_gui(gui) end end)
+mount(gui)
+
+local root = new("Frame", {
+	Name = "Root", AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, -60),
+	Size = UDim2.fromOffset(24, 24), BackgroundTransparency = 1, BorderSizePixel = 0,
+}, gui)
+local uiscale = new("UIScale", { Scale = 1 }, root)
+
+-- Vòng sóng toả ra khi có thông báo (không dùng ảnh nên không bị viền vuông)
+local ring = new("Frame", {
+	Name = "Ring", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 0,
+}, root)
+local ringCorner = round(ring, UDim.new(0, 30))
+local ringStroke = new("UIStroke", {
+	Color = COL.white, Transparency = 1, Thickness = 3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+}, ring)
+
+local island = new("CanvasGroup", {
+	Name = "Island", Size = UDim2.fromScale(1, 1), ZIndex = 1,
+	BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0,
+}, root)
+local corner = round(island, UDim.new(0, 12))
+local stroke = new("UIStroke", {
+	Color = COL.white, Transparency = 0.9, Thickness = 1,
+	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+}, island)
+
+-- Cảm biến camera
+local sensor = new("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 36, 0, 13),
+	Size = UDim2.fromOffset(11, 11), BackgroundColor3 = Color3.fromRGB(10, 10, 20),
+	BorderSizePixel = 0, ZIndex = 3,
+}, island)
+round(sensor)
+new("UIStroke", { Color = Color3.fromRGB(40, 40, 70), Thickness = 1, Transparency = 0.2 }, sensor)
+local lens = new("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromOffset(4, 4), BackgroundColor3 = Color3.fromRGB(40, 55, 140),
+	BorderSizePixel = 0, ZIndex = 4,
+}, sensor)
+round(lens)
+
+local Hit = new("TextButton", {
+	Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "",
+	AutoButtonColor = false, ZIndex = 10,
+}, island)
+
+-- ── MÀN LOAD: lúc đầu chính cái đảo là một hình vuông bo tròn chứa hình ──
+local launch = new("CanvasGroup", {
+	Name = "Launch", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+	BorderSizePixel = 0, ZIndex = 20,
+}, island)
+local launchBg = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = COL.white, BorderSizePixel = 0 }, launch)
+new("UIGradient", {
+	Color = ColorSequence.new(Color3.fromRGB(88, 86, 214), Color3.fromRGB(10, 132, 255)), Rotation = 45,
+}, launchBg)
+local launchGlyph = text(launch, {
+	Size = UDim2.fromScale(1, 1), Text = "D", TextSize = 46, TextXAlignment = Enum.TextXAlignment.Center,
+})
+local launchImg = new("ImageLabel", {
+	Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+	Image = "", ScaleType = Enum.ScaleType.Crop,
+}, launch)
+
+local loadWrap = new("CanvasGroup", {
+	AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 1, 22), Size = UDim2.fromOffset(200, 36),
+	BackgroundTransparency = 1, BorderSizePixel = 0,
+}, root)
+local loadTrack = new("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 0), Size = UDim2.fromOffset(90, 4),
+	BackgroundColor3 = Color3.fromRGB(70, 70, 76), BorderSizePixel = 0,
+}, loadWrap)
+round(loadTrack)
+local loadFill = new("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = COL.white, BorderSizePixel = 0 }, loadTrack)
+round(loadFill)
+local loadText = text(loadWrap, {
+	AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 12), Size = UDim2.fromOffset(200, 16),
+	TextSize = 12, Font = Enum.Font.GothamMedium, TextColor3 = COL.gray, TextXAlignment = Enum.TextXAlignment.Center,
+})
+bind(function() loadText.Text = T().loading end)
+
+-- Trang nằm giữa đảo → khi đảo nở ra nội dung "lộ" dần từ giữa (rất giống iOS)
+local function newPage(name)
+	local d = LAYOUT[name]
+	local p = new("CanvasGroup", {
+		Name = name, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(d[1], d[2]), BackgroundTransparency = 1, BorderSizePixel = 0,
+		GroupTransparency = 1, Visible = false,
+	}, island)
+	new("UIScale", { Name = "S", Scale = 1 }, p)
+	return p
+end
+
+-- ── COMPACT ─────────────────────────────────────────────────────
+local pCompact = newPage("compact")
+local cDot = new("Frame", {
+	Position = UDim2.fromOffset(15, 15), Size = UDim2.fromOffset(7, 7),
+	BackgroundColor3 = COL.green, BorderSizePixel = 0,
+}, pCompact)
+round(cDot)
+local cFps = text(pCompact, { Position = UDim2.fromOffset(27, 0), Size = UDim2.fromOffset(40, 37), TextSize = 13, Text = "60" })
+local cPing = text(pCompact, {
+	Position = UDim2.new(1, -62, 0, 0), Size = UDim2.fromOffset(48, 37), TextSize = 13,
+	TextXAlignment = Enum.TextXAlignment.Right, TextColor3 = COL.green, Text = "0ms",
+})
+
+-- ── STATS ───────────────────────────────────────────────────────
+local pStats = newPage("stats")
+local function makeTile(i, color)
+	local f = new("CanvasGroup", {
+		Position = UDim2.fromOffset(15 + (i - 1) * 106, 40), Size = UDim2.fromOffset(98, 70),
+		BackgroundColor3 = COL.tile, BorderSizePixel = 0,
+	}, pStats)
+	round(f, UDim.new(0, 18))
+	local val = text(f, { Position = UDim2.fromOffset(12, 8), Size = UDim2.new(1, -24, 0, 30), TextSize = 24, Text = "--" })
+	local lab = text(f, {
+		Position = UDim2.fromOffset(12, 36), Size = UDim2.new(1, -24, 0, 14), TextSize = 10,
+		Font = Enum.Font.GothamMedium, TextColor3 = COL.gray,
+	})
+	local bg = new("Frame", {
+		Position = UDim2.new(0, 12, 1, -12), Size = UDim2.new(1, -24, 0, 4),
+		BackgroundColor3 = COL.track, BorderSizePixel = 0,
+	}, f)
+	round(bg)
+	local fill = new("Frame", { Size = UDim2.fromScale(0.5, 1), BackgroundColor3 = color, BorderSizePixel = 0 }, bg)
+	round(fill)
+	return { group = f, val = val, lab = lab, fill = fill }
+end
+local tFps, tPing, tMem = makeTile(1, COL.green), makeTile(2, COL.green), makeTile(3, COL.blue)
+
+-- ── PLAYER ──────────────────────────────────────────────────────
+local pPlayer = newPage("player")
+local avatar = new("ImageLabel", {
+	Position = UDim2.fromOffset(18, 40), Size = UDim2.fromOffset(56, 56),
+	BackgroundColor3 = COL.tile, BorderSizePixel = 0, Image = "",
+}, pPlayer)
+round(avatar)
+local avScale = new("UIScale", { Scale = 1 }, avatar)
+local pName = text(pPlayer, {
+	Position = UDim2.fromOffset(86, 40), Size = UDim2.fromOffset(150, 22), TextSize = 18,
+	Text = lp.DisplayName, TextTruncate = Enum.TextTruncate.AtEnd,
+})
+local pUser = text(pPlayer, {
+	Position = UDim2.fromOffset(86, 62), Size = UDim2.fromOffset(150, 16), TextSize = 13,
+	Font = Enum.Font.GothamMedium, TextColor3 = COL.gray, Text = "@" .. lp.Name,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+})
+local pAge = text(pPlayer, {
+	Position = UDim2.fromOffset(86, 79), Size = UDim2.fromOffset(150, 16), TextSize = 11,
+	Font = Enum.Font.GothamMedium, TextColor3 = COL.green, TextTruncate = Enum.TextTruncate.AtEnd,
+})
+local pCount = text(pPlayer, {
+	Position = UDim2.fromOffset(240, 44), Size = UDim2.fromOffset(84, 28), TextSize = 22,
+	TextXAlignment = Enum.TextXAlignment.Right, Text = "1/1",
+})
+local pCountLab = text(pPlayer, {
+	Position = UDim2.fromOffset(204, 72), Size = UDim2.fromOffset(120, 14), TextSize = 10,
+	Font = Enum.Font.GothamMedium, TextColor3 = COL.gray, TextXAlignment = Enum.TextXAlignment.Right,
+})
+
+-- ── CLOCK ───────────────────────────────────────────────────────
+local pClock = newPage("clock")
+local clTime = text(pClock, { Position = UDim2.fromOffset(20, 32), Size = UDim2.fromOffset(180, 52), TextSize = 46, Text = "00:00" })
+local clDate = text(pClock, {
+	Position = UDim2.fromOffset(22, 84), Size = UDim2.fromOffset(200, 18), TextSize = 13,
+	Font = Enum.Font.GothamMedium, TextColor3 = COL.gray,
+})
+local clSesLab = text(pClock, {
+	Position = UDim2.fromOffset(204, 40), Size = UDim2.fromOffset(120, 14), TextSize = 10,
+	Font = Enum.Font.GothamMedium, TextColor3 = COL.gray, TextXAlignment = Enum.TextXAlignment.Right,
+})
+local clSes = text(pClock, {
+	Position = UDim2.fromOffset(204, 54), Size = UDim2.fromOffset(120, 30), TextSize = 24,
+	TextXAlignment = Enum.TextXAlignment.Right, TextColor3 = COL.orange, Text = "0:00",
+})
+
+-- ── NOTIFY ──────────────────────────────────────────────────────
+local pNotify = newPage("notify")
+local nIcon = new("Frame", {
+	Position = UDim2.fromOffset(18, 34), Size = UDim2.fromOffset(46, 46),
+	BackgroundColor3 = COL.blue, BorderSizePixel = 0,
+}, pNotify)
+round(nIcon, UDim.new(0, 14))
+local nIconScale = new("UIScale", { Scale = 1 }, nIcon)
+local nGlyph = text(nIcon, {
+	Size = UDim2.fromScale(1, 1), TextSize = 24, TextXAlignment = Enum.TextXAlignment.Center, Text = "i",
+})
+local nImg = new("ImageLabel", {
+	Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false,
+}, nIcon)
+round(nImg, UDim.new(0, 14))
+local nTitle = text(pNotify, {
+	Position = UDim2.fromOffset(76, 34), Size = UDim2.fromOffset(246, 22), TextSize = 16,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+})
+local nBody = text(pNotify, {
+	Position = UDim2.fromOffset(76, 56), Size = UDim2.fromOffset(246, 24), TextSize = 13,
+	Font = Enum.Font.GothamMedium, TextColor3 = COL.gray, TextTruncate = Enum.TextTruncate.AtEnd,
+})
+local nBarBG = new("Frame", {
+	Position = UDim2.fromOffset(22, 90), Size = UDim2.fromOffset(296, 3),
+	BackgroundColor3 = Color3.fromRGB(50, 50, 52), BorderSizePixel = 0,
+}, pNotify)
+round(nBarBG)
+local nBar = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = COL.blue, BorderSizePixel = 0 }, nBarBG)
+round(nBar)
+
+-- ── Chấm chỉ trang (bấm được) ───────────────────────────────────
+local dotsGroup = new("CanvasGroup", {
+	AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -2),
+	Size = UDim2.fromOffset(48, 16), BackgroundTransparency = 1, GroupTransparency = 1,
+	Visible = false, ZIndex = 12,
+}, island)
+local dots = {}
+local selectDot -- gán sau
+
+for i = 1, #ORDER do
+	local b = new("TextButton", {
+		Position = UDim2.fromOffset((i - 1) * 16, 0), Size = UDim2.fromOffset(16, 16),
+		BackgroundTransparency = 1, Text = "", AutoButtonColor = false,
+	}, dotsGroup)
+	local d = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(6, 6), BackgroundColor3 = COL.dim, BorderSizePixel = 0,
+	}, b)
+	round(d)
+	dots[i] = d
+	b.Activated:Connect(function() if selectDot then selectDot(i) end end)
+end
+
+------------------------------------------------------------------
+-- TRẠNG THÁI & HOẠT ẢNH
+------------------------------------------------------------------
+local startTick = tick()
+local pages = { compact = pCompact, stats = pStats, player = pPlayer, clock = pClock, notify = pNotify }
+local current = nil           -- trang đang hiện (nil = idle)
+local mode = "rest"           -- "rest" | "expanded" | "notify"
+local pageIdx = 1
+local token = 0
+local dotsShown = false
+local ready = false      -- false trong lúc màn load
+local capRadius = 26     -- bo góc tối đa (26 khi còn là hình vuông, 44 sau khi load)
+
+-- Hai lò xo (rộng & cao) với độ cứng hơi khác nhau → chuyển động "có hồn" hơn
+local sw = spring(24, 3.4, 0.6)
+local sh = spring(24, 3.4, 0.6)
+
+local function applyLang()
+	local L = T()
+	tFps.lab.Text, tPing.lab.Text, tMem.lab.Text = L.fps, L.ping, L.mem
+	clSesLab.Text, pCountLab.Text = L.session, L.players
+	pAge.Text = string.format(L.acct, lp.AccountAge)
+	for _, fn in ipairs(binders) do fn() end
+end
+
+-- Hoạt ảnh phụ khi vào trang
+local basePos = setmetatable({}, { __mode = "k" })
+local function slideIn(obj, delay, dx, dy)
+	local base = basePos[obj]
+	if not base then base = obj.Position; basePos[obj] = base end
+	local prop = obj:IsA("TextLabel") and "TextTransparency" or "GroupTransparency"
+	obj.Position = base + UDim2.fromOffset(dx or 0, dy or 0)
+	obj[prop] = 1
+	task.delay(delay, function()
+		if alive then tw(obj, 0.55, { Position = base, [prop] = 0 }) end
+	end)
+end
+
+local function pop(scaleObj, delay)
+	scaleObj.Scale = 0.2
+	task.delay(delay, function()
+		if alive then tw(scaleObj, 0.65, { Scale = 1 }, EZ.Back) end
+	end)
+end
+
+local function enterExtras(name)
+	if name == "stats" then
+		slideIn(tFps.group, 0, 0, 20); slideIn(tPing.group, 0.06, 0, 20); slideIn(tMem.group, 0.12, 0, 20)
+	elseif name == "player" then
+		pop(avScale, 0)
+		slideIn(pName, 0.08, 18, 0); slideIn(pUser, 0.13, 18, 0); slideIn(pAge, 0.18, 18, 0)
+		slideIn(pCount, 0.10, -18, 0); slideIn(pCountLab, 0.15, -18, 0)
+	elseif name == "clock" then
+		slideIn(clTime, 0, 0, 14); slideIn(clDate, 0.1, 14, 0)
+		slideIn(clSesLab, 0.06, -18, 0); slideIn(clSes, 0.1, -18, 0)
+	elseif name == "notify" then
+		pop(nIconScale, 0)
+		slideIn(nTitle, 0.08, 20, 0); slideIn(nBody, 0.14, 20, 0)
+	end
+end
+
+local function updateDots()
+	for i, d in ipairs(dots) do
+		local on = (i == pageIdx)
+		tw(d, 0.4, {
+			BackgroundColor3 = on and COL.white or COL.dim,
+			Size = on and UDim2.fromOffset(14, 6) or UDim2.fromOffset(6, 6),
+		}, EZ.Back)
+	end
+end
+
+-- Chuyển trang + đổi kích thước đảo. dir = 1 / -1 để trượt ngang, nil = không trượt
+local function rawSetPage(name, dir)
+	current = name
+
+	for n, p in pairs(pages) do
+		if n ~= name and p.Visible then
+			local out = dir and UDim2.new(0.5, -dir * 42, 0.5, 0) or UDim2.fromScale(0.5, 0.5)
+			tw(p, 0.16, { GroupTransparency = 1, Position = out }, EZ.Quad)
+			tw(p.S, 0.16, { Scale = 0.9 }, EZ.Quad)
+			task.delay(0.18, function()
+				if current ~= n then p.Visible = false end
+			end)
+		end
+	end
+
+	-- đảo nở ra → lò xo mềm, nảy nhiều; thu lại → cứng hơn, ít nảy
+	local dim = LAYOUT[name or "idle"]
+	local expanding = dim[1] * dim[2] > sw.t * sh.t
+	local f, d = expanding and 3.3 or 4.2, expanding and 0.56 or 0.8
+	sw.f, sw.d, sh.f, sh.d = f * 1.08, d, f * 0.94, d
+	sw.t, sh.t = dim[1], dim[2]
+
+	if name then
+		local p = pages[name]
+		p.Visible = true
+		p.GroupTransparency = 1
+		p.S.Scale = 0.86
+		p.Position = UDim2.new(0.5, (dir or 0) * 42, 0.5, 0)
+		task.delay(0.09, function()
+			if alive and current == name then
+				tw(p, 0.4, { GroupTransparency = 0, Position = UDim2.fromScale(0.5, 0.5) })
+				tw(p.S, 0.6, { Scale = 1 }, EZ.Back)
+				enterExtras(name)
+			end
+		end)
+	end
+
+	local showDots = (name == "stats" or name == "player" or name == "clock")
+	dotsShown = showDots
+	if showDots then
+		dotsGroup.Visible = true
+		tw(dotsGroup, 0.35, { GroupTransparency = 0 })
+	else
+		tw(dotsGroup, 0.15, { GroupTransparency = 1 })
+		task.delay(0.2, function() if not dotsShown then dotsGroup.Visible = false end end)
+	end
+end
+
+-- ── CHUYỂN TRẠNG THÁI: đóng đảo lại rồi mới mở ra lại ──────────
+-- (không đổi nội dung ngay khi đang mở; mọi lần chuyển trang / thông báo đều đi qua đây)
+local CLOSE_WAIT = 0.45 -- chờ đảo thu xong rồi mới mở
+local transToken = 0
+local function restPage() return CONFIG.RestMode == "compact" and "compact" or nil end
+local function isOpenPage(n) return n == "stats" or n == "player" or n == "clock" or n == "notify" end
+
+local function setPage(name, dir) -- gọi trực tiếp: huỷ mọi lần "mở lại" đang chờ
+	transToken += 1
+	rawSetPage(name, dir)
+end
+
+local function reopenWith(name) -- đóng lại → chờ → mở trang mới
+	transToken += 1
+	local my = transToken
+	rawSetPage(restPage())
+	task.delay(CLOSE_WAIT, function()
+		if alive and transToken == my then rawSetPage(name) end
+	end)
+end
+
+local function goRest()
+	mode = "rest"
+	token += 1
+	setPage(CONFIG.RestMode == "compact" and "compact" or nil)
+end
+
+local function expand(idx, dir)
+	if not ready then return end
+	local newIdx = ((idx - 1) % #ORDER) + 1
+	if mode == "expanded" and current == ORDER[newIdx] then return end
+	mode = "expanded"
+	pageIdx = newIdx
+	token += 1
+	local my = token
+	if isOpenPage(current) then
+		reopenWith(ORDER[pageIdx]) -- đang mở trang/thông báo khác: đóng lại rồi mở
+	else
+		setPage(ORDER[pageIdx], dir)
+	end
+	updateDots()
+	if CONFIG.AutoCollapse and CONFIG.AutoCollapse > 0 then
+		task.delay(CONFIG.AutoCollapse, function()
+			if alive and token == my and mode == "expanded" then goRest() end
+		end)
+	end
+end
+
+selectDot = function(i)
+	if mode == "expanded" and i ~= pageIdx then expand(i, i > pageIdx and 1 or -1) end
+end
+
+-- Cập nhật số liệu (mỗi 0.5s)
+local fps = 60
+local function refresh()
+	local f = math.floor(fps + 0.5)
+	local ping = getPing()
+	local mem = math.floor(Stats:GetTotalMemoryUsageMb() + 0.5)
+	local fc, pc = fpsColor(f), pingColor(ping)
+
+	cFps.Text, cDot.BackgroundColor3 = tostring(f), fc
+	cPing.Text, cPing.TextColor3 = ping .. "ms", pc
+
+	tFps.val.Text, tPing.val.Text, tMem.val.Text = tostring(f), ping .. "ms", mem .. "MB"
+	tFps.fill.BackgroundColor3, tPing.fill.BackgroundColor3 = fc, pc
+	tw(tFps.fill, 0.5, { Size = UDim2.fromScale(math.clamp(f / 60, 0.04, 1), 1) })
+	tw(tPing.fill, 0.5, { Size = UDim2.fromScale(math.clamp(1 - ping / 300, 0.04, 1), 1) })
+	tw(tMem.fill, 0.5, { Size = UDim2.fromScale(math.clamp(mem / 3000, 0.04, 1), 1) })
+
+	pCount.Text = #Players:GetPlayers() .. "/" .. Players.MaxPlayers
+
+	local d = os.date("*t")
+	clTime.Text = os.date("%H:%M")
+	clDate.Text = T().wd[d.wday] .. ", " .. os.date("%d/%m/%Y")
+	clSes.Text = fmtDur(tick() - startTick)
+end
+
+-- Vòng lặp chính
+local acc, frames, settledApplied = 0, 0, false
+table.insert(conns, RunService.Heartbeat:Connect(function(rawDt)
+	local dt = math.min(rawDt, 1 / 20)
+	local moving = math.abs(sw.p - sw.t) > 0.05 or math.abs(sw.v) > 0.05
+		or math.abs(sh.p - sh.t) > 0.05 or math.abs(sh.v) > 0.05
+	if moving then
+		step(sw, dt); step(sh, dt)
+		settledApplied = false
+	elseif not settledApplied then
+		sw.p, sw.v, sh.p, sh.v = sw.t, 0, sh.t, 0
+		settledApplied = true
+		moving = true
+	end
+	if moving then
+		local w, h = math.max(sw.p, 28), math.max(sh.p, 20)
+		root.Size = UDim2.fromOffset(w, h)
+		corner.CornerRadius = UDim.new(0, math.min(h / 2, capRadius))
+		ringCorner.CornerRadius = UDim.new(0, math.min(h / 2, capRadius) + 23)
+	end
+
+	-- chấm FPS "thở" nhẹ
+	if current == "compact" then
+		cDot.BackgroundTransparency = 0.35 * (0.5 + 0.5 * math.sin(tick() * 4))
+	end
+
+	acc += rawDt
+	frames += 1
+	if acc >= 0.5 then
+		fps = frames / acc
+		acc, frames = 0, 0
+		refresh()
+	end
+end))
+
+------------------------------------------------------------------
+-- THÔNG BÁO
+------------------------------------------------------------------
+local KINDS = {
+	info    = { COL.blue,   "i" },
+	success = { COL.green,  "✓" },
+	warn    = { COL.orange, "!" },
+	error   = { COL.red,    "✕" },
+}
+local queue, notifying, skip, notifyId = {}, false, false, 0
+local barTween -- tween thanh đếm ngược của thông báo đang hiện
+local function cancelBar()
+	if barTween then barTween:Cancel(); barTween = nil end
+end
+
+local function glow(color)
+	-- viền sáng trên đảo
+	stroke.Color, stroke.Transparency, stroke.Thickness = color, 0.15, 2
+	tw(stroke, 1.2, { Transparency = 0.9, Thickness = 1, Color = COL.white }, EZ.Quad)
+	-- vòng sóng toả ra theo màu thông báo
+	ringStroke.Color, ringStroke.Transparency, ringStroke.Thickness = color, 0.25, 3
+	ring.Size = UDim2.new(1, 4, 1, 4)
+	tw(ring, 1.0, { Size = UDim2.new(1, 46, 1, 46) }, EZ.Quint)
+	tw(ringStroke, 1.0, { Transparency = 1, Thickness = 1 }, EZ.Quad)
+	-- "giật" nhẹ khi có thông báo
+	sw.v += 70; sh.v += 25
+end
+
+local function showNotify(n)
+	notifyId += 1
+	local id = notifyId
+	nTitle.Text, nBody.Text = n.title, n.text
+	nIcon.BackgroundColor3 = n.color
+	nGlyph.Text, nGlyph.Visible, nImg.Visible = n.glyph, true, false
+	if n.userId then
+		task.spawn(function()
+			local ok, img = pcall(function()
+				return Players:GetUserThumbnailAsync(n.userId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
+			end)
+			if ok and img and id == notifyId then
+				nImg.Image, nImg.Visible, nGlyph.Visible = img, true, false
+			end
+		end)
+	end
+	-- đặt lại thời gian: huỷ thanh đếm của thông báo cũ, thanh mới đầy lại từ đầu
+	cancelBar()
+	nBar.BackgroundColor3 = n.color
+	nBar.Size = UDim2.fromScale(1, 1)
+	setPage("notify")
+	glow(n.color)
+	task.delay(0.35, function()
+		if alive and id == notifyId then
+			barTween = tw(nBar, math.max(n.duration - 0.35, 0.1), { Size = UDim2.fromScale(0, 1) }, EZ.Linear)
+		end
+	end)
+end
+
+local function runQueue()
+	if notifying then return end
+	notifying = true
+	local resume = (mode == "expanded") and pageIdx or nil -- đang mở thì mở lại sau khi xong
+	task.spawn(function()
+		while alive and not ready do task.wait(0.1) end -- chờ màn load xong
+		while alive and #queue > 0 do
+			-- luôn lấy thông báo MỚI NHẤT, bỏ những cái cũ chưa kịp hiện
+			local n = queue[#queue]
+			queue = {}
+			mode = "notify"
+			token += 1
+			if isOpenPage(current) then
+				-- đang mở (trang khác hoặc thông báo trước): đóng lại rồi mới mở thông báo mới
+				cancelBar()
+				setPage(restPage())
+				task.wait(CLOSE_WAIT)
+				if not alive then break end
+				if #queue > 0 then n = queue[#queue]; queue = {} end -- có cái mới hơn lúc đang đóng
+			end
+			showNotify(n)
+			skip = false
+			local t0 = tick()
+			-- có thông báo mới tới là chuyển sang ngay (không đợi hết giờ cái đang hiện)
+			while alive and not skip and #queue == 0 and tick() - t0 < n.duration do task.wait(0.05) end
+		end
+		notifying = false
+		if alive then
+			if resume then expand(resume) else goRest() end
+		end
+	end)
+end
+
+------------------------------------------------------------------
+-- THAO TÁC: chạm = đóng/mở • vuốt = đổi trang • giữ = bảng test
+------------------------------------------------------------------
+local togglePanel -- gán ở phần bảng test
+
+local pressing, pressId, longFired, moved, startPos = false, 0, false, false, Vector3.zero
+
+local function toggleIsland()
+	if notifying then skip = true return end
+	if mode == "rest" then expand(pageIdx) elseif mode == "expanded" then goRest() end
+end
+
+table.insert(conns, Hit.InputBegan:Connect(function(input)
+	if not ready or not isPointer(input) then return end
+	pressing, longFired, moved, startPos = true, false, false, input.Position
+	pressId += 1
+	local id = pressId
+	sw.p -= 5; sh.p -= 2 -- cảm giác "nhấn xuống"
+	task.delay(0.55, function()
+		if alive and pressing and pressId == id and not moved then
+			longFired = true
+			if togglePanel then togglePanel() end
+		end
+	end)
+end))
+
+table.insert(conns, UserInputService.InputChanged:Connect(function(input)
+	if not pressing then return end
+	local t = input.UserInputType
+	if t == Enum.UserInputType.MouseMovement or t == Enum.UserInputType.Touch then
+		if (input.Position - startPos).Magnitude > 12 then moved = true end
+	end
+end))
+
+table.insert(conns, UserInputService.InputEnded:Connect(function(input)
+	if not pressing or not isPointer(input) then return end
+	pressing = false
+	if longFired then return end
+	sw.p += 7 -- bật nhẹ khi thả
+	local d = input.Position - startPos
+	if math.abs(d.X) > 26 and math.abs(d.X) > math.abs(d.Y) then
+		if mode == "expanded" then expand(d.X < 0 and pageIdx + 1 or pageIdx - 1, d.X < 0 and 1 or -1) end
+	elseif d.Y < -18 then
+		if not notifying and mode == "expanded" then goRest() end
+	elseif d.Y > 18 then
+		if not notifying and mode == "rest" then expand(pageIdx) end
+	else
+		toggleIsland()
+	end
+end))
+
+------------------------------------------------------------------
+-- API CÔNG KHAI
+------------------------------------------------------------------
+local DI = { Config = CONFIG }
+
+function DI.Notify(title, body, opts)
+	opts = opts or {}
+	local k = KINDS[opts.kind or "info"] or KINDS.info
+	table.insert(queue, {
+		title = tostring(title or ""), text = tostring(body or ""),
+		color = opts.color or k[1], glyph = opts.glyph or k[2],
+		duration = opts.duration or 3.5, userId = opts.userId,
+	})
+	runQueue()
+end
+
+function DI.Expand(i) if not notifying then expand(i or pageIdx) end end
+function DI.Collapse() if not notifying then goRest() end end
+function DI.Toggle() toggleIsland() end
+
+function DI.SetLanguage(l)
+	if LANG[l] then CONFIG.Language = l; applyLang(); refresh() end
+end
+
+function DI.SetRestMode(m)
+	if m == "compact" or m == "idle" then
+		CONFIG.RestMode = m
+		if mode == "rest" then goRest() end
+	end
+end
+
+------------------------------------------------------------------
+-- BẢNG TEST THÔNG BÁO
+------------------------------------------------------------------
+local PW, PH = 300, 420
+
+local holder = new("Frame", {
+	Name = "TestPanel", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.55),
+	Size = UDim2.fromOffset(PW, PH), BackgroundTransparency = 1, Visible = false, ZIndex = 5,
+}, gui)
+local box = new("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+}, holder)
+local boxScale = new("UIScale", { Scale = 1 }, box)
+
+local panel = new("CanvasGroup", {
+	AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(24, 24, 26),
+	BorderSizePixel = 0, GroupTransparency = 1,
+}, box)
+round(panel, UDim.new(0, 26))
+new("UIStroke", { Color = COL.white, Transparency = 0.9, Thickness = 1 }, panel)
+local popScale = new("UIScale", { Scale = 0.86 }, panel)
+
+-- Header (kéo để di chuyển)
+local header = new("Frame", { Size = UDim2.new(1, 0, 0, 56), BackgroundTransparency = 1, Active = true }, panel)
+local grab = new("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 7), Size = UDim2.fromOffset(36, 4),
+	BackgroundColor3 = Color3.fromRGB(70, 70, 74), BorderSizePixel = 0,
+}, header)
+round(grab)
+local hTitle = text(header, { Position = UDim2.fromOffset(20, 8), Size = UDim2.new(1, -80, 1, -8), TextSize = 19 })
+bind(function() hTitle.Text = T().tpTitle end)
+local closeBtn = new("TextButton", {
+	AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 4), Size = UDim2.fromOffset(30, 30),
+	BackgroundColor3 = Color3.fromRGB(58, 58, 62), Text = "✕", Font = Enum.Font.GothamBold,
+	TextSize = 13, TextColor3 = COL.gray, AutoButtonColor = false, BorderSizePixel = 0,
+}, header)
+round(closeBtn)
+
+local scroll = new("ScrollingFrame", {
+	Position = UDim2.fromOffset(0, 56), Size = UDim2.new(1, 0, 1, -56), BackgroundTransparency = 1,
+	BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = COL.dim,
+	CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
+}, panel)
+new("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder }, scroll)
+new("UIPadding", {
+	PaddingLeft = UDim.new(0, 16), PaddingRight = UDim.new(0, 16),
+	PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 16),
+}, scroll)
+
+local order = 0
+local function nextOrder() order += 1 return order end
+
+local function row(h)
+	local f = new("Frame", {
+		Size = UDim2.new(1, 0, 0, h), BackgroundColor3 = COL.row, BorderSizePixel = 0, LayoutOrder = nextOrder(),
+	}, scroll)
+	round(f, UDim.new(0, 14))
+	return f
+end
+
+local function plainRow(h)
+	return new("Frame", {
+		Size = UDim2.new(1, 0, 0, h), BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = nextOrder(),
+	}, scroll)
+end
+
+local function bindPress(btn)
+	local s = new("UIScale", { Scale = 1 }, btn)
+	btn.MouseButton1Down:Connect(function() tw(s, 0.1, { Scale = 0.95 }) end)
+	local function up() tw(s, 0.3, { Scale = 1 }, EZ.Back) end
+	btn.MouseButton1Up:Connect(up)
+	btn.MouseLeave:Connect(up)
+end
+
+local function mkBtn(parent, key, bg, scaled)
+	local b = new("TextButton", {
+		BackgroundColor3 = bg, AutoButtonColor = false, Font = Enum.Font.GothamBold,
+		TextColor3 = COL.white, TextSize = scaled and 13 or 15, Text = "", BorderSizePixel = 0,
+	}, parent)
+	round(b, UDim.new(0, 14))
+	if scaled then
+		b.TextScaled = true
+		new("UITextSizeConstraint", { MaxTextSize = 13, MinTextSize = 8 }, b)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4) }, b)
+	end
+	bind(function() b.Text = T()[key] end)
+	bindPress(b)
+	return b
+end
+
+-- Ô nhập
+local function mkInput(phKey)
+	local r = row(42)
+	local tb = new("TextBox", {
+		Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -28, 1, 0), BackgroundTransparency = 1,
+		Text = "", PlaceholderColor3 = COL.gray, TextColor3 = COL.white, Font = Enum.Font.GothamMedium,
+		TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false,
+	}, r)
+	bind(function() tb.PlaceholderText = T()[phKey] end)
+	return tb
+end
+local tbTitle = mkInput("phTitle")
+local tbBody = mkInput("phBody")
+
+-- Chọn loại (segmented control có thanh trượt nảy)
+local kinds = { "info", "success", "warn", "error" }
+local kindKeys = { "kInfo", "kOk", "kWarn", "kErr" }
+local kindColors = { COL.blue, COL.green, COL.orange, COL.red }
+local kindIdx = 1
+
+local segRow = row(40)
+local segPill = new("Frame", {
+	Position = UDim2.new(0, 3, 0, 4), Size = UDim2.new(0.25, -6, 1, -8),
+	BackgroundColor3 = COL.blue, BorderSizePixel = 0,
+}, segRow)
+round(segPill, UDim.new(0, 10))
+local segBtns = {}
+local function selectKind(i, instant)
+	kindIdx = i
+	local pos = UDim2.new(0.25 * (i - 1), 3, 0, 4)
+	if instant then segPill.Position = pos else tw(segPill, 0.5, { Position = pos }, EZ.Back) end
+	tw(segPill, 0.25, { BackgroundColor3 = kindColors[i] })
+	for j, b in ipairs(segBtns) do tw(b, 0.2, { TextColor3 = (j == i) and COL.white or COL.gray }) end
+end
+for i = 1, 4 do
+	local b = new("TextButton", {
+		Position = UDim2.new(0.25 * (i - 1), 0, 0, 0), Size = UDim2.new(0.25, 0, 1, 0),
+		BackgroundTransparency = 1, AutoButtonColor = false, Font = Enum.Font.GothamBold,
+		TextColor3 = COL.gray, TextScaled = true, Text = "", ZIndex = 2,
+	}, segRow)
+	new("UITextSizeConstraint", { MaxTextSize = 12, MinTextSize = 8 }, b)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4) }, b)
+	bind(function() b.Text = T()[kindKeys[i]] end)
+	b.Activated:Connect(function() selectKind(i) end)
+	segBtns[i] = b
+end
+selectKind(1, true)
+
+-- Thời gian hiển thị (− / +)
+local duration = 3.5
+local durRow = row(44)
+local durLabel = text(durRow, { Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -140, 1, 0), TextSize = 14, Font = Enum.Font.GothamMedium })
+bind(function() durLabel.Text = T().dur end)
+local durVal = text(durRow, {
+	AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -50, 0.5, 0), Size = UDim2.fromOffset(52, 30),
+	TextSize = 14, TextXAlignment = Enum.TextXAlignment.Center, Text = "3.5s",
+})
+local function setDur(v)
+	duration = math.clamp(v, 1, 10)
+	durVal.Text = string.format("%.1fs", duration)
+end
+local function stepper(x, glyph, delta)
+	local b = new("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, x, 0.5, 0), Size = UDim2.fromOffset(30, 30),
+		BackgroundColor3 = Color3.fromRGB(66, 66, 70), Text = glyph, Font = Enum.Font.GothamBold,
+		TextSize = 18, TextColor3 = COL.white, AutoButtonColor = false, BorderSizePixel = 0,
+	}, durRow)
+	round(b)
+	bindPress(b)
+	b.Activated:Connect(function() setDur(duration + delta) end)
+end
+stepper(-104, "−", -0.5)
+stepper(-12, "+", 0.5)
+
+-- Công tắc kiểu iOS
+local function switchRow(key, initial, onChange)
+	local r = row(44)
+	local lab = text(r, { Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -80, 1, 0), TextSize = 14, Font = Enum.Font.GothamMedium })
+	bind(function() lab.Text = T()[key] end)
+	local track = new("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(50, 30),
+		BackgroundColor3 = COL.track, Text = "", AutoButtonColor = false, BorderSizePixel = 0,
+	}, r)
+	round(track)
+	local knob = new("Frame", {
+		AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0), Size = UDim2.fromOffset(24, 24),
+		BackgroundColor3 = COL.white, BorderSizePixel = 0,
+	}, track)
+	round(knob)
+	local state = initial
+	local function set(on, instant)
+		state = on
+		local pos = on and UDim2.new(0, 23, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
+		local col = on and COL.green or COL.track
+		if instant then
+			knob.Position, track.BackgroundColor3 = pos, col
+		else
+			tw(knob, 0.4, { Position = pos }, EZ.Back)
+			tw(track, 0.25, { BackgroundColor3 = col })
+		end
+	end
+	set(initial, true)
+	track.Activated:Connect(function()
+		set(not state)
+		if onChange then onChange(state) end
+	end)
+	return set
+end
+
+local withAvatar = false
+switchRow("avatarSw", false, function(on) withAvatar = on end)
+
+-- Nút gửi
+local sendBtn = mkBtn(plainRow(46), "send", COL.blue)
+sendBtn.Size = UDim2.fromScale(1, 1)
+sendBtn.Parent.LayoutOrder = nextOrder() -- giữ thứ tự sau công tắc
+local function doSend()
+	local L = T()
+	DI.Notify(
+		tbTitle.Text ~= "" and tbTitle.Text or L.defTitle,
+		tbBody.Text ~= "" and tbBody.Text or L.defBody,
+		{ kind = kinds[kindIdx], duration = duration, userId = withAvatar and lp.UserId or nil }
+	)
+end
+sendBtn.Activated:Connect(doSend)
+
+local send3Btn = mkBtn(plainRow(40), "send3", COL.row)
+send3Btn.Size = UDim2.fromScale(1, 1)
+send3Btn.BackgroundColor3 = Color3.fromRGB(58, 58, 62)
+send3Btn.Activated:Connect(function()
+	local L = T()
+	local base = tbTitle.Text ~= "" and tbTitle.Text or L.defTitle
+	local seq = { "info", "success", "warn" }
+	task.spawn(function()
+		for i, k in ipairs(seq) do
+			DI.Notify(base .. " #" .. i, tbBody.Text ~= "" and tbBody.Text or L.defBody, { kind = k, duration = 4 })
+			task.wait(1.6) -- cách nhau để thấy từng lần chuyển
+		end
+	end)
+end)
+
+-- Hàng nút: mở nhanh từng trang + thu gọn
+do
+	local r = plainRow(40)
+	local keys = { "pg1", "pg2", "pg3", "collapse" }
+	local n, gap = #keys, 6
+	for i, k in ipairs(keys) do
+		local b = mkBtn(r, k, Color3.fromRGB(58, 58, 62), true)
+		b.Size = UDim2.new(1 / n, -gap * (n - 1) / n, 1, 0)
+		b.Position = UDim2.new((i - 1) / n, (i - 1) * gap / n, 0, 0)
+		b.Activated:Connect(function()
+			if i <= 3 then DI.Expand(i) else DI.Collapse() end
+		end)
+	end
+end
+
+-- Cài đặt
+local setLabel = text(plainRow(20), { Size = UDim2.fromScale(1, 1), TextSize = 11, Font = Enum.Font.GothamBold, TextColor3 = COL.gray })
+setLabel.Parent.LayoutOrder = nextOrder()
+bind(function() setLabel.Text = T().settings end)
+
+switchRow("sCompact", CONFIG.RestMode == "compact", function(on) DI.SetRestMode(on and "compact" or "idle") end)
+switchRow("sJoin", CONFIG.PlayerNotifs, function(on) CONFIG.PlayerNotifs = on end)
+switchRow("sLang", CONFIG.Language == "vi", function(on) DI.SetLanguage(on and "vi" or "en") end)
+
+-- Kéo thả (dùng cho header bảng và nút chuông)
+local function makeDrag(handle, target, onTap)
+	local dragging, mv, startIn, startP = false, false, nil, nil
+	handle.InputBegan:Connect(function(input)
+		if not isPointer(input) then return end
+		dragging, mv = true, false
+		startIn, startP = input.Position, target.Position
+	end)
+	table.insert(conns, UserInputService.InputChanged:Connect(function(input)
+		if not dragging then return end
+		local t = input.UserInputType
+		if t ~= Enum.UserInputType.MouseMovement and t ~= Enum.UserInputType.Touch then return end
+		local d = input.Position - startIn
+		if not mv and d.Magnitude > 8 then mv = true end
+		if mv then
+			target.Position = UDim2.new(startP.X.Scale, startP.X.Offset + d.X, startP.Y.Scale, startP.Y.Offset + d.Y)
+		end
+	end))
+	table.insert(conns, UserInputService.InputEnded:Connect(function(input)
+		if dragging and isPointer(input) then
+			dragging = false
+			if not mv and onTap then onTap() end
+		end
+	end))
+end
+makeDrag(header, holder)
+
+-- Mở / đóng bảng
+local panelOpen = false
+local fab, fabStroke
+
+local function setPanel(open)
+	if open == panelOpen then return end
+	panelOpen = open
+	if open then
+		holder.Visible = true
+		panel.GroupTransparency = 1
+		popScale.Scale = 0.86
+		tw(panel, 0.3, { GroupTransparency = 0 }, EZ.Quad)
+		tw(popScale, 0.6, { Scale = 1 }, EZ.Back)
+	else
+		tw(panel, 0.2, { GroupTransparency = 1 }, EZ.Quad)
+		tw(popScale, 0.2, { Scale = 0.92 }, EZ.Quad)
+		task.delay(0.22, function() if not panelOpen then holder.Visible = false end end)
+	end
+	if fab then
+		tw(fab, 0.3, { BackgroundColor3 = open and COL.blue or Color3.fromRGB(10, 10, 12) })
+		if fabStroke then
+			tw(fabStroke, 0.3, {
+				Color = open and COL.blue or COL.white,
+				Thickness = open and 3 or 1,
+				Transparency = open and 0 or 0.85,
+			})
+		end
+	end
+end
+togglePanel = function() setPanel(not panelOpen) end
+closeBtn.Activated:Connect(function() setPanel(false) end)
+bindPress(closeBtn)
+
+function DI.OpenPanel() setPanel(true) end
+function DI.ClosePanel() setPanel(false) end
+function DI.TogglePanel() togglePanel() end
+
+-- Nút chuông nổi (kéo được, chạm để mở/đóng bảng)
+fab = new("TextButton", {
+	Name = "TestFab", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 34, 0.45, 0),
+	Size = UDim2.fromOffset(50, 50), BackgroundColor3 = Color3.fromRGB(10, 10, 12), Text = "🔔",
+	TextSize = 21, Font = Enum.Font.GothamBold, AutoButtonColor = false, BorderSizePixel = 0,
+	Visible = false, ZIndex = 4,
+}, gui)
+round(fab, UDim.new(0, 15))
+local fabScale = new("UIScale", { Scale = 1 }, fab)
+fabStroke = new("UIStroke", {
+	Color = COL.white, Transparency = 0.85, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+}, fab)
+-- nút dùng chính hình thương hiệu (nạp cùng lúc với màn load)
+local fabImg = new("ImageLabel", {
+	Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+	ScaleType = Enum.ScaleType.Crop, Image = "", Visible = false, ZIndex = 5,
+}, fab)
+round(fabImg, UDim.new(0, 15))
+makeDrag(fab, fab, function() togglePanel() end)
+
+------------------------------------------------------------------
+-- TỶ LỆ THEO MÀN HÌNH
+------------------------------------------------------------------
+local function updateScale()
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+	local vp = cam.ViewportSize
+	uiscale.Scale = math.clamp((vp.X - 16) / 340, 0.55, 1)
+	boxScale.Scale = math.clamp(math.min((vp.X - 24) / PW, (vp.Y - 24) / PH), 0.5, 1)
+end
+updateScale()
+do
+	local cam = workspace.CurrentCamera
+	if cam then
+		table.insert(conns, cam:GetPropertyChangedSignal("ViewportSize"):Connect(updateScale))
+	end
+end
+
+------------------------------------------------------------------
+-- HUỶ
+------------------------------------------------------------------
+function DI.Destroy()
+	alive = false
+	for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+	pcall(function() gui:Destroy() end)
+	if genv.DynamicTest == DI then genv.DynamicTest = nil end
+	if genv.DynamicIsland == DI then genv.DynamicIsland = nil end
+end
+
+genv.DynamicTest = DI
+genv.DynamicIsland = DI -- bí danh cho code cũ
+
+------------------------------------------------------------------
+-- KHỞI ĐỘNG
+------------------------------------------------------------------
+applyLang()
+refresh()
+
+task.spawn(function()
+	local ok, img = pcall(function()
+		return Players:GetUserThumbnailAsync(lp.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+	end)
+	if ok and img and alive then avatar.Image = img end
+end)
+
+table.insert(conns, Players.PlayerAdded:Connect(function(plr)
+	if CONFIG.PlayerNotifs and plr ~= lp then
+		DI.Notify(plr.DisplayName, T().joined, { kind = "success", userId = plr.UserId, duration = 2.8 })
+	end
+end))
+table.insert(conns, Players.PlayerRemoving:Connect(function(plr)
+	if CONFIG.PlayerNotifs and plr ~= lp then
+		DI.Notify(plr.DisplayName, T().left, { color = COL.gray, glyph = "–", userId = plr.UserId, duration = 2.8 })
+	end
+end))
+
+-- Lấy hình cho màn load: ID Roblox, "rbxassetid://..." hoặc link ảnh (cần executor có request/writefile/getcustomasset)
+local function resolveImage(src)
+	if not src or src == "" then return "" end
+	src = tostring(src)
+	if src:sub(1, 4) ~= "http" then
+		if tonumber(src) then return "rbxassetid://" .. src end
+		return src
+	end
+	local ok, res = pcall(function()
+		local req = (syn and syn.request) or request or http_request
+		local gca = getcustomasset or getsynasset
+		if not (req and gca and writefile) then return "" end
+		local r = req({ Url = src, Method = "GET" })
+		if not r or not r.Body or #r.Body == 0 then return "" end
+		writefile("DynamicTest_launch.png", r.Body)
+		return gca("DynamicTest_launch.png")
+	end)
+	return (ok and res) or ""
+end
+
+-- Logo nhúng sẵn (PNG 256x256, base64) — ghi ra file rồi nạp bằng getcustomasset, không phụ thuộc Roblox duyệt ảnh
+local EMBED_LOGO_B64 = [==[
+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
+]==]
+
+local B64CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local function b64decode(data)
+	data = (data:gsub("[^%w%+/=]", ""))
+	local lookup = {}
+	for i = 1, 64 do lookup[B64CHARS:sub(i, i)] = i - 1 end
+	local out, n = {}, #data
+	for i = 1, n, 4 do
+		local a, b = lookup[data:sub(i, i)], lookup[data:sub(i + 1, i + 1)]
+		local c, d = lookup[data:sub(i + 2, i + 2)], lookup[data:sub(i + 3, i + 3)]
+		if not (a and b) then break end
+		local v = a * 262144 + b * 4096 + (c or 0) * 64 + (d or 0)
+		out[#out + 1] = string.char(math.floor(v / 65536) % 256)
+		if c then out[#out + 1] = string.char(math.floor(v / 256) % 256) end
+		if d then out[#out + 1] = string.char(v % 256) end
+	end
+	return table.concat(out)
+end
+
+local function embeddedLogo()
+	local ok, res = pcall(function()
+		local gca = getcustomasset or getsynasset
+		if not (writefile and gca) then return "" end
+		writefile("DynamicTest_logo.png", b64decode(EMBED_LOGO_B64))
+		return gca("DynamicTest_logo.png")
+	end)
+	return (ok and res) or ""
+end
+
+-- Thử nạp một nội dung ảnh, chờ tối đa `timeout` giây, trả về true nếu ảnh thật sự tải được
+local function tryLoad(label, content, timeout)
+	label.Image = content
+	local done = false
+	task.spawn(function()
+		pcall(function() ContentProvider:PreloadAsync({ label }) end)
+		done = true
+	end)
+	local t0 = tick()
+	while not done and tick() - t0 < timeout do task.wait(0.05) end
+	return label.IsLoaded == true
+end
+
+local function buildImageCandidates()
+	local list, seen = {}, {}
+	local function add(name, content)
+		if content and content ~= "" and not seen[content] then
+			seen[content] = true
+			table.insert(list, { name = name, content = content })
+		end
+	end
+	if CONFIG.UseEmbeddedLogo then add("logo nhúng", embeddedLogo()) end
+	add("CONFIG.LoadingImage", resolveImage(CONFIG.LoadingImage))
+	local aid = CONFIG.LoadingImageAssetId
+	if aid then
+		add("thumbnail", "rbxthumb://type=Asset&id=" .. aid .. "&w=420&h=420")
+		add("asset id", "rbxassetid://" .. aid)
+	end
+	if not CONFIG.UseEmbeddedLogo then add("logo nhúng", embeddedLogo()) end
+	return list
+end
+
+
+-- MÀN LOAD → hình vuông bay lên thành Dynamic Island, nút chuông cũng bay ra theo
+local function runIntro()
+	local LS = 100 -- cạnh hình vuông
+	root.Position = UDim2.new(0.5, 0, 0.5, -LS / 2 - 14)
+	sw.p, sh.p, sw.t, sh.t, sw.v, sh.v = 40, 40, LS, LS, 0, 0
+	sw.f, sw.d, sh.f, sh.d = 3.4, 0.55, 3.0, 0.55
+	settledApplied = false
+	sensor.Visible = false
+	launch.Visible, launch.GroupTransparency = true, 0
+
+	-- nạp hình (nếu có)
+	local launchReady, imageFailed = false, false
+	task.spawn(function()
+		local winner
+		local tried = {}
+		for _, c in ipairs(buildImageCandidates()) do
+			if not alive then return end
+			table.insert(tried, c.name)
+			if tryLoad(launchImg, c.content, 3) then winner = c; break end
+		end
+		if winner then
+			launchBg.Visible, launchGlyph.Visible = false, false
+			fabImg.Image, fabImg.Visible, fab.Text = winner.content, true, ""
+			print("[DynamicTest] logo nạp bằng: " .. winner.name)
+		else
+			launchImg.Image = ""
+			imageFailed = true
+			warn("[DynamicTest] không tải được logo (đã thử: " .. table.concat(tried, ", ") .. ")")
+		end
+		launchReady = true
+	end)
+
+	-- chờ: tối thiểu LoadingTime, game load xong, hình sẵn sàng (tối đa 8s) — hình vuông "thở" nhẹ
+	local t0 = tick()
+	local minT = CONFIG.LoadingTime or 2
+	tw(loadFill, minT, { Size = UDim2.fromScale(0.92, 1) }, EZ.Quad)
+	while alive and tick() - t0 < 8 and (tick() - t0 < minT or not launchReady or not game:IsLoaded()) do
+		local k = LS + 4 * math.sin((tick() - t0) * 4)
+		sw.t, sh.t = k, k
+		task.wait(0.03)
+	end
+	if not alive then return end
+	sw.t, sh.t = LS, LS
+	tw(loadFill, 0.3, { Size = UDim2.fromScale(1, 1) })
+	task.wait(0.4)
+	if not alive then return end
+
+	-- BAY LÊN: hình vuông → viên thuốc ở trên cùng
+	tw(loadWrap, 0.25, { GroupTransparency = 1 }, EZ.Quad)
+	goRest()
+	sw.f, sw.d, sh.f, sh.d = 3.8, 0.58, 3.3, 0.58
+	tw(root, 0.95, { Position = UDim2.new(0.5, 0, 0, CONFIG.TopOffset) }, EZ.Quint)
+	task.delay(0.15, function()
+		if alive then tw(launch, 0.55, { GroupTransparency = 1 }, EZ.Quad) end
+	end)
+	task.delay(0.8, function()
+		if alive then sensor.Visible = true end
+	end)
+
+	-- nút chuông cũng từ chỗ đó bay ra vị trí của nó
+	if CONFIG.ShowTestButton then
+		local finalPos = fab.Position
+		fab.Position = UDim2.new(0.5, 0, 0.5, 0)
+		fabScale.Scale = 0.2
+		fab.Visible = true
+		task.delay(0.2, function()
+			if not alive then return end
+			tw(fab, 0.9, { Position = finalPos }, EZ.Quint)
+			tw(fabScale, 0.75, { Scale = 1 }, EZ.Back)
+		end)
+	end
+
+	task.delay(1.1, function()
+		if not alive then return end
+		capRadius = 44
+		launch.Visible = false
+		ready = true
+	end)
+
+	if CONFIG.StartupNotif or imageFailed then
+		task.delay(1.6, function()
+			if not alive then return end
+			if imageFailed then
+				DI.Notify(T().imgFail, T().imgFailHint, { kind = "warn", duration = 5 })
+			elseif CONFIG.StartupNotif then
+				DI.Notify(T().ready, T().hint, { kind = "success", duration = 4 })
+			end
+		end)
+	end
+end
+
+task.spawn(runIntro)
+
+return DI
